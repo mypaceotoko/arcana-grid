@@ -77,6 +77,7 @@ export type MatchPlayerState = {
   playerId: PlayerId;
   side: PlayerSide;
   reserveUnitIds: UnitId[];
+  setupSubmitted: boolean;
   flag: FlagState;
   connected: boolean;
 };

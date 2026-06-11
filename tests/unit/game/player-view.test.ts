@@ -88,6 +88,7 @@ const player = (id: typeof playerA | typeof playerB): MatchPlayerState => ({
   reserveUnitIds: [],
   flag: { ownerId: id, damage: 0, maxDamage: 3 },
   connected: true,
+  setupSubmitted: false,
 });
 
 const makeState = (visibilities: readonly UnitVisibility[] = []): MatchState => {

@@ -72,6 +72,7 @@ const player = (
   reserveUnitIds: [],
   flag: { ownerId: id, damage: 0, maxDamage: 3 },
   connected: true,
+  setupSubmitted: false,
 });
 
 const unit = ({
@@ -226,11 +227,10 @@ describe("applyTacticalDuelAction reserve branch", () => {
     expect(eventTypes(deployed.events)).toEqual(["RESERVE_DEPLOYED", "TURN_CHANGED"]);
 
     const unsupported: GameAction = {
-      type: "SUBMIT_INITIAL_PLACEMENT",
-      actionId: toActionId("setup-1"),
+      type: "CONCEDE_MATCH",
+      actionId: toActionId("concede-1"),
       matchId,
       actorId: playerA,
-      placements: [],
       expectedStateVersion: 9,
     };
     expectErrorCode(

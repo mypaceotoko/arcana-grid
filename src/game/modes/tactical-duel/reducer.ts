@@ -7,16 +7,26 @@ import type {
   MatchState,
   DeployReserveAction,
   MoveUnitAction,
+  SubmitInitialPlacementAction,
   Result,
   RuleError,
   Stance,
   UnitId,
   UnitState,
 } from "../../core";
-import { areCoordinatesEqual, isInsideBoard } from "../../core";
+import {
+  areCoordinatesEqual,
+  coordinateKey,
+  getUnitAtCoordinate,
+  isInsideBoard,
+} from "../../core";
 import { resolveCombat } from "./combat";
 import { deployReserveUnit } from "./reserve";
 import { isCoordinateInFlagArea } from "./flag";
+import {
+  getInitialPlacementCoordinates,
+  isCoordinateInInitialPlacementArea,
+} from "./placement";
 import { calculateLegalMoves, type LegalMove } from "./movement";
 import type { TacticalRuleConfig } from "./types";
 import { evaluateTacticalDuelVictory } from "./victory";
@@ -39,6 +49,12 @@ export type ApplyDeployReserveActionInput = {
   config: TacticalRuleConfig;
 };
 
+export type ApplySubmitInitialPlacementActionInput = {
+  state: MatchState;
+  action: SubmitInitialPlacementAction;
+  config: TacticalRuleConfig;
+};
+
 type ApplyTacticalDuelActionInput = {
   state: MatchState;
   action: GameAction;
@@ -57,6 +73,11 @@ type ValidatedMoveInput = ValidatedCommonActionInput & {
 
 type ValidatedDeployReserveInput = ValidatedCommonActionInput & {
   unit: UnitState;
+};
+
+type ValidatedSubmitInitialPlacementInput = {
+  actor: MatchPlayerState;
+  placementUnits: readonly UnitState[];
 };
 
 type CommonActionValidationInput = {
@@ -444,6 +465,480 @@ const validateDeployReserveAction = (
   return { ok: true, value: { ...commonResult.value, unit } };
 };
 
+
+const validateSetupAction = ({
+  state,
+  action,
+}: ApplySubmitInitialPlacementActionInput): Result<MatchPlayerState, RuleError> => {
+  if (state.id !== action.matchId) {
+    return {
+      ok: false,
+      error: makeRuleError("MATCH_ID_MISMATCH", "Action matchId must match state id.", {
+        stateMatchId: state.id,
+        actionMatchId: action.matchId,
+      }),
+    };
+  }
+
+  if (state.gameMode !== "tactical_duel") {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "UNSUPPORTED_GAME_MODE",
+        "SUBMIT_INITIAL_PLACEMENT is only supported for tactical_duel matches.",
+        { gameMode: state.gameMode },
+      ),
+    };
+  }
+
+  if (state.phase === "finished" || state.winnerPlayerId !== null || state.winReason !== null) {
+    return {
+      ok: false,
+      error: makeRuleError("MATCH_FINISHED", "Finished matches cannot accept setup actions.", {
+        phase: state.phase,
+        winnerPlayerId: state.winnerPlayerId,
+        winReason: state.winReason,
+      }),
+    };
+  }
+
+  if (state.phase !== "setup") {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "INVALID_PHASE",
+        "SUBMIT_INITIAL_PLACEMENT requires setup phase.",
+        { phase: state.phase },
+      ),
+    };
+  }
+
+  if (state.currentTurnPlayerId !== null) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "CURRENT_TURN_PLAYER_MISSING",
+        "Setup matches must not have a current turn player.",
+        { currentTurnPlayerId: state.currentTurnPlayerId },
+      ),
+    };
+  }
+
+  if (state.stateVersion !== action.expectedStateVersion) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "STALE_STATE_VERSION",
+        "Action expectedStateVersion must match current stateVersion.",
+        {
+          stateVersion: state.stateVersion,
+          expectedStateVersion: action.expectedStateVersion,
+        },
+      ),
+    };
+  }
+
+  if (state.players.length !== 2) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "INVALID_PLAYER_COUNT",
+        "Setup actions require exactly two players.",
+        { playerCount: state.players.length },
+      ),
+    };
+  }
+
+  const playerIds = new Set<MatchPlayerId>();
+  let actor: MatchPlayerState | null = null;
+  let actorCount = 0;
+
+  for (const player of state.players) {
+    if (playerIds.has(player.id)) {
+      return {
+        ok: false,
+        error: makeRuleError("DUPLICATE_MATCH_PLAYER", "Match player ids must be unique.", {
+          playerId: player.id,
+        }),
+      };
+    }
+
+    playerIds.add(player.id);
+
+    if (player.id === action.actorId) {
+      actor = player;
+      actorCount += 1;
+    }
+  }
+
+  if (actor === null || actorCount !== 1) {
+    return {
+      ok: false,
+      error: makeRuleError("NOT_YOUR_TURN", "Actor must be one of the match players.", {
+        actorId: action.actorId,
+      }),
+    };
+  }
+
+  if (actor.setupSubmitted) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "INITIAL_PLACEMENT_ALREADY_SUBMITTED",
+        "Initial placement has already been submitted.",
+        { actorId: action.actorId },
+      ),
+    };
+  }
+
+  return { ok: true, value: actor };
+};
+
+const validateReserveUnitIds = (
+  actor: MatchPlayerState,
+  units: readonly UnitState[],
+  config: TacticalRuleConfig,
+): Result<ReadonlySet<UnitId>, RuleError> => {
+  if (actor.reserveUnitIds.length !== config.reserveUnitCount) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "INVALID_RESERVE_UNIT_IDS",
+        "reserveUnitIds must contain exactly the configured reserve unit count.",
+        {
+          playerId: actor.id,
+          reserveUnitCount: actor.reserveUnitIds.length,
+          expectedReserveUnitCount: config.reserveUnitCount,
+        },
+      ),
+    };
+  }
+
+  const reserveSet = new Set<UnitId>();
+  for (const unitId of actor.reserveUnitIds) {
+    if (reserveSet.has(unitId)) {
+      return {
+        ok: false,
+        error: makeRuleError("INVALID_RESERVE_UNIT_IDS", "reserveUnitIds must be unique.", {
+          playerId: actor.id,
+          unitId,
+        }),
+      };
+    }
+
+    const matchingUnits = findUnitsById(units, unitId);
+    if (matchingUnits.length !== 1) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INVALID_RESERVE_UNIT_IDS",
+          "Each reserveUnitIds entry must reference exactly one unit.",
+          { playerId: actor.id, unitId, unitCount: matchingUnits.length },
+        ),
+      };
+    }
+
+    if (matchingUnits[0].ownerId !== actor.id) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INVALID_RESERVE_UNIT_IDS",
+          "Reserve unit ids must reference units owned by the player.",
+          { playerId: actor.id, unitId, ownerId: matchingUnits[0].ownerId },
+        ),
+      };
+    }
+
+    reserveSet.add(unitId);
+  }
+
+  return { ok: true, value: reserveSet };
+};
+
+const validateInitialPlacementDestinations = (
+  input: ApplySubmitInitialPlacementActionInput,
+  actor: MatchPlayerState,
+): Result<true, RuleError> => {
+  const placementAreaKeys = new Set(
+    getInitialPlacementCoordinates(
+      actor.side,
+      input.state.boardSize,
+      input.config.initialPlacementDepth,
+    ).map(coordinateKey),
+  );
+  const destinationKeys = new Set<string>();
+
+  for (const placement of input.action.placements) {
+    const destination = placement.position;
+    const key = coordinateKey(destination);
+
+    if (destinationKeys.has(key)) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "DUPLICATE_INITIAL_PLACEMENT_DESTINATION",
+          "Initial placement destinations must be unique.",
+          { destination },
+        ),
+      };
+    }
+    destinationKeys.add(key);
+
+    if (!isInsideBoard(destination, input.state.boardSize)) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INVALID_INITIAL_PLACEMENT_DESTINATION",
+          "Initial placement destination must be inside the board.",
+          { destination, boardSize: input.state.boardSize },
+        ),
+      };
+    }
+
+    if (
+      !isCoordinateInInitialPlacementArea(
+        destination,
+        actor.side,
+        input.state.boardSize,
+        input.config.initialPlacementDepth,
+      ) ||
+      !placementAreaKeys.has(key)
+    ) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INVALID_INITIAL_PLACEMENT_DESTINATION",
+          "Initial placement destination must be in the actor initial placement area.",
+          { destination, side: actor.side },
+        ),
+      };
+    }
+
+    const flagResult = isCoordinateInFlagArea({
+      coordinate: destination,
+      side: actor.side,
+      boardSize: input.state.boardSize,
+    });
+
+    if (!flagResult.ok) {
+      return flagResult;
+    }
+
+    if (flagResult.value) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INITIAL_PLACEMENT_DESTINATION_IS_FLAG",
+          "Initial placement destination must not be in the flag area.",
+          { destination, side: actor.side },
+        ),
+      };
+    }
+
+    const occupant = getUnitAtCoordinate(input.state.units, destination);
+    if (occupant !== null) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INITIAL_PLACEMENT_DESTINATION_OCCUPIED",
+          "Initial placement destination must be empty.",
+          { destination, occupantUnitId: occupant.id },
+        ),
+      };
+    }
+  }
+
+  return { ok: true, value: true };
+};
+
+const validateSubmitInitialPlacementAction = (
+  input: ApplySubmitInitialPlacementActionInput,
+): Result<ValidatedSubmitInitialPlacementInput, RuleError> => {
+  const setupResult = validateSetupAction(input);
+  if (!setupResult.ok) {
+    return setupResult;
+  }
+
+  const uniqueUnitsResult = validateUniqueUnitIds(input.state.units);
+  if (!uniqueUnitsResult.ok) {
+    return uniqueUnitsResult;
+  }
+
+  const actor = setupResult.value;
+  const reserveResult = validateReserveUnitIds(actor, input.state.units, input.config);
+  if (!reserveResult.ok) {
+    return reserveResult;
+  }
+  const reserveUnitIds = reserveResult.value;
+
+  if (input.action.placements.length !== input.config.initialUnitCount) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "INVALID_INITIAL_PLACEMENT_COUNT",
+        "Initial placement must submit exactly the configured initial unit count.",
+        {
+          placementCount: input.action.placements.length,
+          expectedPlacementCount: input.config.initialUnitCount,
+        },
+      ),
+    };
+  }
+
+  const placementUnitIds = new Set<UnitId>();
+  for (const placement of input.action.placements) {
+    if (placementUnitIds.has(placement.unitId)) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "DUPLICATE_INITIAL_PLACEMENT_UNIT",
+          "Initial placement unit ids must be unique.",
+          { unitId: placement.unitId },
+        ),
+      };
+    }
+    placementUnitIds.add(placement.unitId);
+
+    if (!isValidStance(placement.stance)) {
+      return {
+        ok: false,
+        error: makeRuleError("INVALID_ACTION", "Initial placement stance must be valid.", {
+          unitId: placement.unitId,
+          stance: placement.stance,
+        }),
+      };
+    }
+  }
+
+  const destinationResult = validateInitialPlacementDestinations(input, actor);
+  if (!destinationResult.ok) {
+    return destinationResult;
+  }
+
+  const ownedUnits = input.state.units.filter((unit) => unit.ownerId === actor.id);
+  const initialUnits = ownedUnits.filter((unit) => !reserveUnitIds.has(unit.id));
+
+  if (initialUnits.length !== input.config.initialUnitCount) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "INITIAL_PLACEMENT_UNIT_MISMATCH",
+        "Owned non-reserve units must exactly match the configured initial unit count.",
+        {
+          playerId: actor.id,
+          initialUnitCount: initialUnits.length,
+          expectedInitialUnitCount: input.config.initialUnitCount,
+        },
+      ),
+    };
+  }
+
+  for (const placement of input.action.placements) {
+    const targetUnits = findUnitsById(input.state.units, placement.unitId);
+    if (targetUnits.length === 0) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INITIAL_PLACEMENT_UNIT_MISMATCH",
+          "Initial placement unit must exist.",
+          { unitId: placement.unitId },
+        ),
+      };
+    }
+
+    if (targetUnits.length > 1) {
+      return {
+        ok: false,
+        error: makeRuleError("DUPLICATE_UNIT", "Unit ids must be unique.", {
+          unitId: placement.unitId,
+        }),
+      };
+    }
+
+    const unit = targetUnits[0];
+    if (unit.ownerId !== actor.id) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INITIAL_PLACEMENT_OWNER_MISMATCH",
+          "Initial placement unit must be owned by the actor.",
+          { unitId: unit.id, ownerId: unit.ownerId, actorId: actor.id },
+        ),
+      };
+    }
+
+    if (reserveUnitIds.has(unit.id)) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INITIAL_PLACEMENT_INCLUDES_RESERVE",
+          "Reserve units cannot be included in initial placement.",
+          { unitId: unit.id },
+        ),
+      };
+    }
+
+    if (!initialUnits.some((initialUnit) => initialUnit.id === unit.id)) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INITIAL_PLACEMENT_UNIT_MISMATCH",
+          "Submitted unit must be one of the actor initial placement units.",
+          { unitId: unit.id },
+        ),
+      };
+    }
+
+    if (unit.status !== "reserve") {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "UNIT_NOT_IN_RESERVE",
+          "Initial placement units must start in reserve status.",
+          { unitId: unit.id, status: unit.status },
+        ),
+      };
+    }
+
+    if (unit.position !== null) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "UNIT_NOT_IN_RESERVE",
+          "Initial placement reserve units must not already have a position.",
+          { unitId: unit.id, position: unit.position },
+        ),
+      };
+    }
+
+    if (!Number.isFinite(unit.card.baseDefense) || unit.card.baseDefense <= 0) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INVALID_UNIT_BASE_DEFENSE",
+          "Initial placement unit baseDefense must be a positive finite number.",
+          { unitId: unit.id, baseDefense: unit.card.baseDefense },
+        ),
+      };
+    }
+  }
+
+  for (const initialUnit of initialUnits) {
+    if (!placementUnitIds.has(initialUnit.id)) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INITIAL_PLACEMENT_UNIT_MISMATCH",
+          "Submitted units must exactly match all actor initial placement units.",
+          { missingUnitId: initialUnit.id },
+        ),
+      };
+    }
+  }
+
+  return { ok: true, value: { actor, placementUnits: initialUnits } };
+};
+
 const isDestinationFlagArea = (
   state: MatchState,
   destination: Coordinate,
@@ -789,6 +1284,68 @@ export const applyDeployReserveAction = (
   return finalizeSuccessfulAction(nextState, deploymentResult.value.events);
 };
 
+
+export const applySubmitInitialPlacementAction = (
+  input: ApplySubmitInitialPlacementActionInput,
+): Result<TacticalDuelActionResult, RuleError> => {
+  const validationResult = validateSubmitInitialPlacementAction(input);
+
+  if (!validationResult.ok) {
+    return validationResult;
+  }
+
+  const placementsByUnitId = new Map(
+    input.action.placements.map((placement) => [placement.unitId, placement]),
+  );
+  const placementUnitIds = new Set(
+    validationResult.value.placementUnits.map((unit) => unit.id),
+  );
+  const nextUnits = input.state.units.map((unit) => {
+    if (!placementUnitIds.has(unit.id)) {
+      return unit;
+    }
+
+    const placement = placementsByUnitId.get(unit.id);
+    if (placement === undefined) {
+      return unit;
+    }
+
+    return {
+      ...unit,
+      status: "board" as const,
+      position: cloneCoordinate(placement.position),
+      stance: placement.stance,
+      currentDefense: unit.card.baseDefense,
+    };
+  });
+
+  const nextState: MatchState = {
+    ...input.state,
+    players: input.state.players.map((player) =>
+      player.id === input.action.actorId
+        ? { ...player, setupSubmitted: true }
+        : player,
+    ),
+    units: nextUnits,
+    unitVisibilities: input.state.unitVisibilities,
+    stateVersion: input.state.stateVersion + 1,
+  };
+
+  return {
+    ok: true,
+    value: {
+      state: nextState,
+      events: [
+        {
+          type: "INITIAL_PLACEMENT_SUBMITTED",
+          playerId: input.action.actorId,
+          unitCount: input.action.placements.length,
+        },
+      ],
+    },
+  };
+};
+
 export const applyTacticalDuelAction = (
   input: ApplyTacticalDuelActionInput,
 ): Result<TacticalDuelActionResult, RuleError> => {
@@ -801,6 +1358,12 @@ export const applyTacticalDuelAction = (
       });
     case "DEPLOY_RESERVE":
       return applyDeployReserveAction({
+        state: input.state,
+        action: input.action,
+        config: input.config,
+      });
+    case "SUBMIT_INITIAL_PLACEMENT":
+      return applySubmitInitialPlacementAction({
         state: input.state,
         action: input.action,
         config: input.config,
