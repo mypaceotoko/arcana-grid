@@ -183,22 +183,19 @@ const runMove = (
 ): TacticalDuelActionResult => unwrap(applyMoveUnitAction({ state, action: moveAction, config }));
 
 describe("applyTacticalDuelAction unsupported actions", () => {
-  it("rejects non-MOVE_UNIT actions without mutating state", () => {
+  it("rejects actions other than MOVE_UNIT and DEPLOY_RESERVE without mutating state", () => {
     const state = baseState();
     const before = cloneJson(state);
-    const deployAction: GameAction = {
-      type: "DEPLOY_RESERVE",
-      actionId: toActionId("deploy-1"),
+    const concedeAction: GameAction = {
+      type: "CONCEDE_MATCH",
+      actionId: toActionId("concede-1"),
       matchId,
       actorId: playerA,
-      unitId: toUnitId("reserve"),
-      destination: { row: 6, col: 3 },
-      stance: "attack",
       expectedStateVersion: 11,
     };
 
     expectErrorCode(
-      applyTacticalDuelAction({ state, action: deployAction, config }),
+      applyTacticalDuelAction({ state, action: concedeAction, config }),
       "UNSUPPORTED_ACTION",
     );
     expect(cloneJson(state)).toBe(before);
