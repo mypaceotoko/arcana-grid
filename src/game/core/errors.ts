@@ -12,7 +12,12 @@ export type RuleErrorCode =
   | "PATH_BLOCKED"
   | "DESTINATION_OCCUPIED"
   | "STALE_STATE_VERSION"
-  | "MATCH_FINISHED";
+  | "MATCH_FINISHED"
+  | "INVALID_COMBATANTS"
+  | "SAME_OWNER_COMBAT"
+  | "COMBATANT_NOT_ON_BOARD"
+  | "INVALID_COMBAT_DESTINATION"
+  | "INVALID_COMBAT_VALUE";
 
 export type RuleError = {
   code: RuleErrorCode;
