@@ -263,6 +263,16 @@ export const localDebugMatchState: MatchState = {
       stance: "attack",
       currentDefense: 1500,
     }),
+
+    makeUnit({
+      id: "south-flag-runner",
+      ownerId: LOCAL_DEBUG_MATCH_PLAYER_IDS.south,
+      card: cards.southAegis,
+      row: 2,
+      col: 3,
+      stance: "attack",
+      currentDefense: 2400,
+    }),
     makeUnit({
       id: "south-defeated",
       ownerId: LOCAL_DEBUG_MATCH_PLAYER_IDS.south,

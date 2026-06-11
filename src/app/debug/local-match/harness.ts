@@ -3,6 +3,10 @@ import {
   applyTacticalDuelAction,
   buildPlayerMatchView,
   calculateLegalMoves,
+  getFlagAreaCoordinates,
+  getReserveDeploymentCoordinates,
+  isCoordinateInFlagArea,
+  coordinateKey,
   toActionId,
   toMatchPlayerId,
   toUnitId,
@@ -32,6 +36,15 @@ export type LocalDebugMoveCandidate = {
   kind: "move" | "engage";
 };
 
+export type LocalDebugReserveCandidate = {
+  destination: Coordinate;
+};
+
+export type LocalDebugFlagAttackCandidate = {
+  destination: Coordinate;
+  kind: "flag_attack";
+};
+
 export type LocalDebugEventLogEntry = {
   index: number;
   type: GameEventPayload["type"];
@@ -49,11 +62,45 @@ export type LocalDebugMoveCandidatesResponse = {
   candidates: readonly LocalDebugMoveCandidate[];
 };
 
+export type LocalDebugReserveCandidatesResponse = {
+  unitId: UnitId;
+  candidates: readonly LocalDebugReserveCandidate[];
+};
+
+export type LocalDebugFlagAttackCandidatesResponse = {
+  unitId: UnitId;
+  candidates: readonly LocalDebugFlagAttackCandidate[];
+};
+
 export type LocalDebugMoveActionInput = {
   viewerSide: PlayerSide;
   unitId: UnitId;
   destination: Coordinate;
   nextStance: Stance;
+  expectedStateVersion: number;
+  actionId: ActionId;
+};
+
+export type LocalDebugDeployReserveActionInput = {
+  viewerSide: PlayerSide;
+  unitId: UnitId;
+  destination: Coordinate;
+  stance: Stance;
+  expectedStateVersion: number;
+  actionId: ActionId;
+};
+
+export type LocalDebugAttackFlagActionInput = {
+  viewerSide: PlayerSide;
+  unitId: UnitId;
+  target: Coordinate;
+  nextStance: Stance;
+  expectedStateVersion: number;
+  actionId: ActionId;
+};
+
+export type LocalDebugConcedeMatchActionInput = {
+  viewerSide: PlayerSide;
   expectedStateVersion: number;
   actionId: ActionId;
 };
@@ -154,10 +201,37 @@ const buildEventLog = (
     summary: summarizeEvent(event),
   }));
 
-const assertViewerCanAct = (
+const assertActiveMatch = (state: MatchState): Result<true, RuleError> => {
+  if (state.phase === "finished" || state.winnerPlayerId !== null || state.winReason !== null) {
+    return {
+      ok: false,
+      error: makeRuleError("MATCH_FINISHED", "Finished matches cannot accept debug actions.", {
+        phase: state.phase,
+        winnerPlayerId: state.winnerPlayerId,
+        winReason: state.winReason,
+      }),
+    };
+  }
+
+  if (state.phase !== "active") {
+    return {
+      ok: false,
+      error: makeRuleError("INVALID_PHASE", "Debug actions require active phase.", {
+        phase: state.phase,
+      }),
+    };
+  }
+
+  return { ok: true, value: true };
+};
+
+const assertViewerInMatch = (
   state: MatchState,
   viewerSide: PlayerSide,
 ): Result<MatchPlayerId, RuleError> => {
+  const active = assertActiveMatch(state);
+  if (!active.ok) return active;
+
   const viewerId = getViewerId(viewerSide);
 
   if (!state.players.some((player) => player.id === viewerId)) {
@@ -168,6 +242,19 @@ const assertViewerCanAct = (
       }),
     };
   }
+
+  return { ok: true, value: viewerId };
+};
+
+const assertViewerCanAct = (
+  state: MatchState,
+  viewerSide: PlayerSide,
+): Result<MatchPlayerId, RuleError> => {
+  const viewer = assertViewerInMatch(state, viewerSide);
+
+  if (!viewer.ok) return viewer;
+
+  const viewerId = viewer.value;
 
   if (state.currentTurnPlayerId !== viewerId) {
     return {
@@ -277,10 +364,154 @@ export const getLocalDebugMoveCandidates = ({
     ok: true,
     value: {
       unitId,
-      candidates: moves.value.map((move) => ({
-        destination: cloneCoordinate(move.destination),
-        kind: move.kind,
+      candidates: moves.value.flatMap((move) => {
+        const flagArea = isAnyFlagCoordinate(store.state, move.destination);
+        if (!flagArea.ok || flagArea.value) return [];
+        return [{
+          destination: cloneCoordinate(move.destination),
+          kind: move.kind,
+        }];
+      }),
+    },
+  };
+};
+
+
+const isAnyFlagCoordinate = (
+  state: MatchState,
+  destination: Coordinate,
+): Result<boolean, RuleError> => {
+  for (const player of state.players) {
+    const result = isCoordinateInFlagArea({
+      coordinate: destination,
+      side: player.side,
+      boardSize: state.boardSize,
+    });
+
+    if (!result.ok) return result;
+    if (result.value) return { ok: true, value: true };
+  }
+
+  return { ok: true, value: false };
+};
+
+const getOpponentPlayer = (state: MatchState, viewerId: MatchPlayerId) =>
+  state.players.find((player) => player.id !== viewerId);
+
+export const getLocalDebugReserveDeploymentCandidates = ({
+  viewerSide,
+  unitId,
+}: {
+  viewerSide: PlayerSide;
+  unitId: UnitId;
+}): Result<LocalDebugReserveCandidatesResponse, RuleError> => {
+  const store = getGlobalStore();
+  const actor = assertViewerCanAct(store.state, viewerSide);
+
+  if (!actor.ok) return actor;
+
+  const unit = store.state.units.find((candidate) => candidate.id === unitId);
+  if (unit === undefined) {
+    return { ok: false, error: makeRuleError("UNIT_NOT_FOUND", "Reserve unit was not found.", { unitId }) };
+  }
+
+  if (unit.ownerId !== actor.value) {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_NOT_OWNED", "Viewer does not own the reserve unit.", {
+        unitId,
+        ownerId: unit.ownerId,
+        viewerId: actor.value,
+      }),
+    };
+  }
+
+  if (unit.status !== "reserve" || unit.position !== null) {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_NOT_IN_RESERVE", "Only reserve units can be deployed.", {
+        unitId,
+        status: unit.status,
+      }),
+    };
+  }
+
+  const player = store.state.players.find((candidate) => candidate.id === actor.value);
+  if (player === undefined) {
+    return { ok: false, error: makeRuleError("MATCH_PLAYER_NOT_FOUND", "Viewer player was not found.", { viewerId: actor.value }) };
+  }
+
+  const coordinates = getReserveDeploymentCoordinates({
+    player,
+    units: store.state.units,
+    boardSize: store.state.boardSize,
+    config: TACTICAL_DUEL_RULE_CONFIG,
+  });
+
+  if (!coordinates.ok) return coordinates;
+
+  return {
+    ok: true,
+    value: {
+      unitId,
+      candidates: coordinates.value.map((destination) => ({
+        destination: cloneCoordinate(destination),
       })),
+    },
+  };
+};
+
+export const getLocalDebugFlagAttackCandidates = ({
+  viewerSide,
+  unitId,
+}: {
+  viewerSide: PlayerSide;
+  unitId: UnitId;
+}): Result<LocalDebugFlagAttackCandidatesResponse, RuleError> => {
+  const store = getGlobalStore();
+  const actor = assertViewerCanAct(store.state, viewerSide);
+
+  if (!actor.ok) return actor;
+
+  const unit = assertMovableViewerUnit(store.state, actor.value, unitId);
+  if (!unit.ok) return unit;
+
+  const opponent = getOpponentPlayer(store.state, actor.value);
+  if (opponent === undefined) {
+    return { ok: false, error: makeRuleError("MATCH_PLAYER_NOT_FOUND", "Opponent player was not found.", { actorId: actor.value }) };
+  }
+
+  const flagCoordinates = getFlagAreaCoordinates({
+    side: opponent.side,
+    boardSize: store.state.boardSize,
+  });
+  if (!flagCoordinates.ok) return flagCoordinates;
+
+  const moves = calculateLegalMoves({
+    unit: unit.value,
+    units: store.state.units,
+    boardSize: store.state.boardSize,
+    movementRule: unit.value.card.movementRule,
+    config: TACTICAL_DUEL_RULE_CONFIG,
+  });
+  if (!moves.ok) return moves;
+
+  const reachableMoveKeys = new Set(
+    moves.value
+      .filter((move) => move.kind === "move")
+      .map((move) => coordinateKey(move.destination)),
+  );
+
+  return {
+    ok: true,
+    value: {
+      unitId,
+      candidates: flagCoordinates.value
+        .filter((destination) => reachableMoveKeys.has(coordinateKey(destination)))
+        .map((destination) => ({
+          destination: cloneCoordinate(destination),
+          kind: "flag_attack" as const,
+        })),
     },
   };
 };
@@ -320,6 +551,97 @@ export const submitLocalDebugMoveUnit = (
   return getLocalDebugMatchView(input.viewerSide);
 };
 
+
+export const submitLocalDebugDeployReserve = (
+  input: LocalDebugDeployReserveActionInput,
+): Result<LocalDebugViewResponse, RuleError> => {
+  const store = getGlobalStore();
+  const actor = assertViewerCanAct(store.state, input.viewerSide);
+
+  if (!actor.ok) return actor;
+
+  const result = applyTacticalDuelAction({
+    state: store.state,
+    config: TACTICAL_DUEL_RULE_CONFIG,
+    action: {
+      type: "DEPLOY_RESERVE",
+      actionId: input.actionId,
+      matchId: store.state.id,
+      actorId: actor.value,
+      unitId: input.unitId,
+      destination: cloneCoordinate(input.destination),
+      stance: input.stance,
+      expectedStateVersion: input.expectedStateVersion,
+    },
+  });
+
+  if (!result.ok) return result;
+
+  store.state = result.value.state;
+  store.events.push(...result.value.events);
+
+  return getLocalDebugMatchView(input.viewerSide);
+};
+
+export const submitLocalDebugAttackFlag = (
+  input: LocalDebugAttackFlagActionInput,
+): Result<LocalDebugViewResponse, RuleError> => {
+  const store = getGlobalStore();
+  const actor = assertViewerCanAct(store.state, input.viewerSide);
+
+  if (!actor.ok) return actor;
+
+  const result = applyTacticalDuelAction({
+    state: store.state,
+    config: TACTICAL_DUEL_RULE_CONFIG,
+    action: {
+      type: "ATTACK_FLAG",
+      actionId: input.actionId,
+      matchId: store.state.id,
+      actorId: actor.value,
+      unitId: input.unitId,
+      target: cloneCoordinate(input.target),
+      nextStance: input.nextStance,
+      expectedStateVersion: input.expectedStateVersion,
+    },
+  });
+
+  if (!result.ok) return result;
+
+  store.state = result.value.state;
+  store.events.push(...result.value.events);
+
+  return getLocalDebugMatchView(input.viewerSide);
+};
+
+export const submitLocalDebugConcedeMatch = (
+  input: LocalDebugConcedeMatchActionInput,
+): Result<LocalDebugViewResponse, RuleError> => {
+  const store = getGlobalStore();
+  const actor = assertViewerInMatch(store.state, input.viewerSide);
+
+  if (!actor.ok) return actor;
+
+  const result = applyTacticalDuelAction({
+    state: store.state,
+    config: TACTICAL_DUEL_RULE_CONFIG,
+    action: {
+      type: "CONCEDE_MATCH",
+      actionId: input.actionId,
+      matchId: store.state.id,
+      actorId: actor.value,
+      expectedStateVersion: input.expectedStateVersion,
+    },
+  });
+
+  if (!result.ok) return result;
+
+  store.state = result.value.state;
+  store.events.push(...result.value.events);
+
+  return getLocalDebugMatchView(input.viewerSide);
+};
+
 export const resetLocalDebugMatch = (
   viewerSide: PlayerSide,
 ): Result<LocalDebugViewResponse, RuleError> => {
@@ -331,6 +653,12 @@ export const resetLocalDebugMatch = (
 
 export const unsafeGetLocalDebugMatchStateForTests = (): MatchState =>
   cloneJson(getGlobalStore().state);
+
+export const unsafeSetLocalDebugMatchStateForTests = (state: MatchState): void => {
+  const store = getGlobalStore();
+  store.state = cloneJson(state);
+  store.events = [];
+};
 
 export const toLocalDebugUnitId = (value: string): UnitId => toUnitId(value);
 export const toLocalDebugActionId = (value: string): ActionId => toActionId(value);

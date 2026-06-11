@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   TACTICAL_DUEL_RULE_CONFIG,
   calculateLegalMoves,
+  isCoordinateInFlagArea,
   toActionId,
   toUnitId,
 } from "../../../src/game";
@@ -11,11 +12,17 @@ import {
   localDebugMatchState,
 } from "../../../src/app/debug/local-match/fixture";
 import {
+  getLocalDebugFlagAttackCandidates,
   getLocalDebugMatchView,
   getLocalDebugMoveCandidates,
+  getLocalDebugReserveDeploymentCandidates,
   resetLocalDebugMatch,
+  submitLocalDebugAttackFlag,
+  submitLocalDebugConcedeMatch,
+  submitLocalDebugDeployReserve,
   submitLocalDebugMoveUnit,
   unsafeGetLocalDebugMatchStateForTests,
+  unsafeSetLocalDebugMatchStateForTests,
 } from "../../../src/app/debug/local-match/harness";
 import type { Result, RuleError } from "../../../src/game";
 
@@ -39,6 +46,8 @@ const southAegis = toUnitId("local-debug-south-aegis");
 const southReserve = toUnitId("local-debug-south-reserve");
 const southDefeated = toUnitId("local-debug-south-defeated");
 const northHiddenShade = toUnitId("local-debug-north-hidden-shade");
+const southFlagRunner = toUnitId("local-debug-south-flag-runner");
+const northReserve = toUnitId("local-debug-north-reserve");
 
 const moveActionId = (name: string) => toActionId(`local-debug-test-${name}`);
 
@@ -93,7 +102,25 @@ describe("local debug match harness move candidates", () => {
       }),
     );
 
-    expect(response.candidates).toEqual(engineMoves);
+    const withoutFlagAreas = engineMoves.filter((move) => {
+      const northFlag = unwrap(
+        isCoordinateInFlagArea({
+          coordinate: move.destination,
+          side: "north",
+          boardSize: state.boardSize,
+        }),
+      );
+      const southFlag = unwrap(
+        isCoordinateInFlagArea({
+          coordinate: move.destination,
+          side: "south",
+          boardSize: state.boardSize,
+        }),
+      );
+      return !northFlag && !southFlag;
+    });
+
+    expect(response.candidates).toEqual(withoutFlagAreas);
     expect(response.candidates).toContainEqual({
       destination: { row: 4, col: 5 },
       kind: "move",
@@ -214,6 +241,188 @@ describe("local debug match harness MOVE_UNIT", () => {
       "DESTINATION_NOT_LEGAL",
     );
 
+    expect(unsafeGetLocalDebugMatchStateForTests()).toEqual(before);
+  });
+});
+
+
+describe("local debug match harness DEPLOY_RESERVE", () => {
+  it("returns only safe, legal own reserve deployment candidates", () => {
+    const response = unwrap(
+      getLocalDebugReserveDeploymentCandidates({ viewerSide: "south", unitId: southReserve }),
+    );
+
+    expect(response.candidates.length).toBeGreaterThan(0);
+    expect(response.candidates).not.toContainEqual({ destination: { row: 7, col: 3 } });
+    expect(response.candidates).not.toContainEqual({ destination: { row: 7, col: 4 } });
+    expect(response.candidates).not.toContainEqual({ destination: { row: 6, col: 3 } });
+    expect(response.candidates.every((candidate) => candidate.destination.row >= 6)).toBe(true);
+    expect(JSON.stringify(response)).not.toContain("South Reserve");
+    expect(JSON.stringify(response)).not.toContain("baseAttack");
+  });
+
+  it("rejects opponent reserve and reserve deployment outside viewer turn", () => {
+    expectErrorCode(
+      getLocalDebugReserveDeploymentCandidates({ viewerSide: "south", unitId: northReserve }),
+      "UNIT_NOT_OWNED",
+    );
+    expectErrorCode(
+      getLocalDebugReserveDeploymentCandidates({ viewerSide: "north", unitId: northReserve }),
+      "NOT_YOUR_TURN",
+    );
+  });
+
+  it("deploys through applyTacticalDuelAction and returns a safe updated view", () => {
+    const response = unwrap(
+      submitLocalDebugDeployReserve({
+        viewerSide: "south",
+        unitId: southReserve,
+        destination: { row: 6, col: 0 },
+        stance: "attack",
+        expectedStateVersion: localDebugMatchState.stateVersion,
+        actionId: moveActionId("deploy-reserve"),
+      }),
+    );
+    const deployed = response.view.units.find((unit) => unit.unitId === southReserve);
+
+    expect(deployed).toMatchObject({ status: "board", position: { row: 6, col: 0 } });
+    expect(deployed?.revealed).toBe(true);
+    if (deployed?.revealed) {
+      expect(deployed.stance).toBe("attack");
+      expect(deployed.currentDefense).toBe(deployed.card.baseDefense);
+    }
+    expect(response.view.currentTurnPlayerId).toBe(LOCAL_DEBUG_MATCH_PLAYER_IDS.north);
+    expect(response.view.stateVersion).toBe(localDebugMatchState.stateVersion + 1);
+    expect(response.events.map((event) => event.type)).toContain("RESERVE_DEPLOYED");
+    expect(JSON.stringify(response)).not.toContain("North Reserve Secret");
+  });
+});
+
+describe("local debug match harness ATTACK_FLAG", () => {
+  it("returns safe opponent flag candidates only for own board units on viewer turn", () => {
+    const response = unwrap(
+      getLocalDebugFlagAttackCandidates({ viewerSide: "south", unitId: southFlagRunner }),
+    );
+
+    expect(response.candidates).toEqual([{ destination: { row: 0, col: 3 }, kind: "flag_attack" }]);
+    expect(JSON.stringify(response)).not.toContain("South Aegis");
+    expect(JSON.stringify(response)).not.toContain("baseAttack");
+    expectErrorCode(
+      getLocalDebugFlagAttackCandidates({ viewerSide: "south", unitId: northHiddenShade }),
+      "UNIT_NOT_OWNED",
+    );
+    expectErrorCode(
+      getLocalDebugFlagAttackCandidates({ viewerSide: "north", unitId: northHiddenShade }),
+      "NOT_YOUR_TURN",
+    );
+  });
+
+  it("applies flag damage, reveal, stance, finish, and does not move the attacker", () => {
+    const response = unwrap(
+      submitLocalDebugAttackFlag({
+        viewerSide: "south",
+        unitId: southFlagRunner,
+        target: { row: 0, col: 3 },
+        nextStance: "defense",
+        expectedStateVersion: localDebugMatchState.stateVersion,
+        actionId: moveActionId("attack-flag"),
+      }),
+    );
+    const attacker = response.view.units.find((unit) => unit.unitId === southFlagRunner);
+    const north = response.view.players.find((player) => player.id === LOCAL_DEBUG_MATCH_PLAYER_IDS.north);
+
+    expect(attacker?.position).toEqual({ row: 2, col: 3 });
+    expect(attacker?.revealed).toBe(true);
+    if (attacker?.revealed) expect(attacker.stance).toBe("defense");
+    expect(north?.flag.damage).toBe(3);
+    expect(response.view.phase).toBe("finished");
+    expect(response.view.winnerPlayerId).toBe(LOCAL_DEBUG_MATCH_PLAYER_IDS.south);
+    expect(response.view.winReason).toBe("flag_destroyed");
+    expect(response.view.stateVersion).toBe(localDebugMatchState.stateVersion + 1);
+    expect(response.events.map((event) => event.type)).toEqual([
+      "UNIT_REVEALED",
+      "FLAG_ATTACKED",
+      "FLAG_DAMAGED",
+      "MATCH_FINISHED",
+    ]);
+    expect(JSON.stringify(response)).not.toContain("North Hidden Shade");
+  });
+});
+
+describe("local debug match harness CONCEDE_MATCH", () => {
+  it("succeeds during active phase even on the opponent turn", () => {
+    const state = unsafeGetLocalDebugMatchStateForTests();
+    unsafeSetLocalDebugMatchStateForTests({
+      ...state,
+      currentTurnPlayerId: LOCAL_DEBUG_MATCH_PLAYER_IDS.north,
+    });
+
+    const response = unwrap(
+      submitLocalDebugConcedeMatch({
+        viewerSide: "south",
+        expectedStateVersion: state.stateVersion,
+        actionId: moveActionId("concede"),
+      }),
+    );
+
+    expect(response.view.phase).toBe("finished");
+    expect(response.view.winnerPlayerId).toBe(LOCAL_DEBUG_MATCH_PLAYER_IDS.north);
+    expect(response.view.winReason).toBe("concession");
+    expect(response.view.stateVersion).toBe(state.stateVersion + 1);
+    expect(response.events.map((event) => event.type)).toEqual([
+      "MATCH_CONCEDED",
+      "MATCH_FINISHED",
+    ]);
+  });
+
+  it("rejects setup and finished phases and blocks later operations", () => {
+    const setupState = { ...unsafeGetLocalDebugMatchStateForTests(), phase: "setup" as const };
+    unsafeSetLocalDebugMatchStateForTests(setupState);
+    expectErrorCode(
+      submitLocalDebugConcedeMatch({
+        viewerSide: "south",
+        expectedStateVersion: setupState.stateVersion,
+        actionId: moveActionId("concede-setup"),
+      }),
+      "INVALID_PHASE",
+    );
+
+    unsafeSetLocalDebugMatchStateForTests(localDebugMatchState);
+    unwrap(
+      submitLocalDebugConcedeMatch({
+        viewerSide: "south",
+        expectedStateVersion: localDebugMatchState.stateVersion,
+        actionId: moveActionId("concede-finished"),
+      }),
+    );
+    expectErrorCode(
+      getLocalDebugMoveCandidates({ viewerSide: "south", unitId: southAegis }),
+      "MATCH_FINISHED",
+    );
+  });
+
+  it("rejects stale stateVersion and invalid input without changing state", () => {
+    const before = unsafeGetLocalDebugMatchStateForTests();
+
+    expectErrorCode(
+      submitLocalDebugConcedeMatch({
+        viewerSide: "south",
+        expectedStateVersion: before.stateVersion - 1,
+        actionId: moveActionId("concede-stale"),
+      }),
+      "STALE_STATE_VERSION",
+    );
+    expectErrorCode(
+      submitLocalDebugAttackFlag({
+        viewerSide: "south",
+        unitId: southFlagRunner,
+        target: { row: 0, col: 4 },
+        nextStance: "attack",
+        expectedStateVersion: before.stateVersion,
+        actionId: moveActionId("blocked-path"),
+      }),
+      "FLAG_ATTACK_NOT_LEGAL",
+    );
     expect(unsafeGetLocalDebugMatchStateForTests()).toEqual(before);
   });
 });

@@ -23,7 +23,9 @@ import {
 } from "./display";
 import type {
   LocalDebugEventLogEntry,
+  LocalDebugFlagAttackCandidate,
   LocalDebugMoveCandidate,
+  LocalDebugReserveCandidate,
   LocalDebugViewResponse,
 } from "./harness";
 
@@ -41,7 +43,12 @@ type ApiSuccess<T> = { ok: true; value: T };
 type ApiFailure = { ok: false; error: { code: string; message: string } };
 type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 
-type MoveStep = "idle" | "destination" | "stance" | "confirm";
+type ActionMode = "none" | "move" | "deploy" | "flag_attack" | "concede";
+type ActionStep = "idle" | "destination" | "stance" | "confirm";
+type BoardCandidate =
+  | LocalDebugMoveCandidate
+  | (LocalDebugReserveCandidate & { kind: "deploy" })
+  | LocalDebugFlagAttackCandidate;
 
 const formatPlayerLabel = (player: MatchPlayerState): string =>
   `${player.side} / ${player.id}`;
@@ -50,6 +57,9 @@ const compactId = (id: string): string => id.replace("local-debug-", "");
 
 const coordinateKey = (coordinate: Coordinate): string =>
   `${coordinate.row}:${coordinate.col}`;
+
+const makeActionId = (): string =>
+  `local-debug-action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const getUnitToken = (unit: UnitView): string => {
   if (!unit.revealed) return "伏";
@@ -72,6 +82,47 @@ const getUnitClasses = (view: PlayerMatchView, unit: UnitView): string => {
   return own
     ? "border-emerald-300/80 bg-emerald-400/20 text-emerald-50"
     : "border-amber-300/80 bg-amber-400/20 text-amber-50";
+};
+
+const candidateLabel = (candidate: BoardCandidate): string => {
+  switch (candidate.kind) {
+    case "move":
+      return "通常移動";
+    case "engage":
+      return "戦闘";
+    case "deploy":
+      return "リザーバー配置";
+    case "flag_attack":
+      return "旗攻撃";
+  }
+};
+
+const candidateMarker = (candidate: BoardCandidate): string => {
+  switch (candidate.kind) {
+    case "move":
+      return "○";
+    case "engage":
+      return "⚔";
+    case "deploy":
+      return "配";
+    case "flag_attack":
+      return "旗";
+  }
+};
+
+const candidateClasses = (candidate: BoardCandidate | undefined): string => {
+  switch (candidate?.kind) {
+    case "move":
+      return "border-cyan-300 bg-cyan-400/15";
+    case "engage":
+      return "border-rose-300 bg-rose-500/20";
+    case "deploy":
+      return "border-emerald-300 bg-emerald-400/20";
+    case "flag_attack":
+      return "border-amber-200 bg-amber-400/25";
+    default:
+      return "border-slate-700 bg-slate-950/70 hover:border-slate-500";
+  }
 };
 
 const UnitPill = ({
@@ -103,7 +154,7 @@ const FlagPanel = ({ player }: { player: MatchPlayerState }) => (
         <p className="mt-1 text-sm font-bold text-white">{player.side}</p>
       </div>
       <div className="rounded-full border border-rose-300/40 bg-rose-400/10 px-2 py-1 text-xs font-bold text-rose-100">
-        {player.flag.damage} / {player.flag.maxDamage}
+        damage {player.flag.damage} / {player.flag.maxDamage}
       </div>
     </div>
   </div>
@@ -112,13 +163,18 @@ const FlagPanel = ({ player }: { player: MatchPlayerState }) => (
 const ReservePanel = ({
   view,
   player,
+  selectedUnitId,
+  disabled,
   onSelect,
 }: {
   view: PlayerMatchView;
   player: MatchPlayerState;
+  selectedUnitId: UnitView["unitId"] | null;
+  disabled: boolean;
   onSelect: (unitId: UnitView["unitId"]) => void;
 }) => {
   const reserves = getReserveUnitsForPlayer(view, player.id);
+  const ownsPanel = player.id === view.viewerId;
 
   return (
     <div className="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-3">
@@ -126,25 +182,39 @@ const ReservePanel = ({
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
           Reserve
         </p>
-        <span className="text-xs text-slate-400">{player.side}</span>
+        <span className="text-xs text-slate-400">
+          {player.side} / {ownsPanel ? "自分" : "相手（選択不可）"}
+        </span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {reserves.length === 0 ? (
           <span className="text-xs text-slate-500">なし</span>
         ) : (
-          reserves.map((unit) => (
-            <button
-              key={unit.unitId}
-              type="button"
-              onClick={() => onSelect(unit.unitId)}
-              className="rounded-xl border border-slate-600 bg-slate-950/70 px-3 py-2 text-left text-xs text-slate-100 transition hover:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-300"
-            >
-              <span className="font-bold">
-                {unit.revealed ? unit.card.cardName : "伏せカード"}
-              </span>
-              <span className="block text-slate-400">{compactId(unit.unitId)}</span>
-            </button>
-          ))
+          reserves.map((unit) => {
+            const selected = selectedUnitId === unit.unitId;
+            const selectable = ownsPanel && !disabled;
+            return (
+              <button
+                key={unit.unitId}
+                type="button"
+                onClick={() => {
+                  if (selectable) onSelect(unit.unitId);
+                }}
+                disabled={!selectable}
+                className={`rounded-xl border px-3 py-2 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  selected
+                    ? "border-emerald-300 bg-emerald-400/20 text-emerald-50"
+                    : "border-slate-600 bg-slate-950/70 text-slate-100 hover:border-cyan-300"
+                }`}
+                aria-label={`${ownsPanel ? "own" : "opponent"} reserve ${compactId(unit.unitId)}`}
+              >
+                <span className="font-bold">
+                  {unit.revealed ? unit.card.cardName : "伏せカード"}
+                </span>
+                <span className="block text-slate-400">{compactId(unit.unitId)}</span>
+              </button>
+            );
+          })
         )}
       </div>
     </div>
@@ -157,7 +227,7 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
       <section className="rounded-3xl border border-slate-700/80 bg-slate-900/80 p-4">
         <h2 className="text-lg font-bold text-white">選択ユニット</h2>
         <p className="mt-3 text-sm leading-6 text-slate-400">
-          自分の手番で、自分の盤面ユニットをタップするとMOVE_UNITの移動候補をサーバーから取得します。
+          自分の盤面ユニットでMOVE_UNIT/ATTACK_FLAG、自分のリザーバーでDEPLOY_RESERVEをサーバーハーネスへ問い合わせます。
         </p>
       </section>
     );
@@ -235,7 +305,9 @@ const EventLog = ({ events }: { events: readonly LocalDebugEventLogEntry[] }) =>
       <ol className="mt-3 grid gap-2 text-xs text-slate-200">
         {events.map((event) => (
           <li key={event.index} className="rounded-2xl bg-slate-950/70 p-3">
-            <span className="font-bold text-cyan-200">#{event.index} {event.type}</span>
+            <span className="font-bold text-cyan-200">
+              #{event.index} {event.type}
+            </span>
             <span className="mt-1 block text-slate-300">{event.summary}</span>
           </li>
         ))}
@@ -250,9 +322,10 @@ export default function LocalMatchDebugClient({
 }: LocalMatchDebugClientProps) {
   const [data, setData] = useState(initialData);
   const [selectedUnitId, setSelectedUnitId] = useState<UnitView["unitId"] | null>(null);
-  const [moveStep, setMoveStep] = useState<MoveStep>("idle");
-  const [candidates, setCandidates] = useState<readonly LocalDebugMoveCandidate[]>([]);
-  const [selectedDestination, setSelectedDestination] = useState<LocalDebugMoveCandidate | null>(null);
+  const [actionMode, setActionMode] = useState<ActionMode>("none");
+  const [actionStep, setActionStep] = useState<ActionStep>("idle");
+  const [candidates, setCandidates] = useState<readonly BoardCandidate[]>([]);
+  const [selectedDestination, setSelectedDestination] = useState<BoardCandidate | null>(null);
   const [nextStance, setNextStance] = useState<Stance>("attack");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -268,7 +341,11 @@ export default function LocalMatchDebugClient({
   const currentPlayer = view.players.find(
     (player) => player.id === view.currentTurnPlayerId,
   );
+  const winner = view.players.find((player) => player.id === view.winnerPlayerId);
   const isViewerTurn = view.currentTurnPlayerId === view.viewerId;
+  const isFinished = view.phase === "finished";
+  const canStartTurnAction = !isFinished && isViewerTurn && !isPending;
+  const canConcede = view.phase === "active" && !isPending;
   const candidatesByCoordinate = useMemo(
     () => new Map(candidates.map((candidate) => [coordinateKey(candidate.destination), candidate])),
     [candidates],
@@ -276,7 +353,8 @@ export default function LocalMatchDebugClient({
 
   const resetSelection = () => {
     setSelectedUnitId(null);
-    setMoveStep("idle");
+    setActionMode("none");
+    setActionStep("idle");
     setCandidates([]);
     setSelectedDestination(null);
     setNextStance("attack");
@@ -296,11 +374,44 @@ export default function LocalMatchDebugClient({
     return (await response.json()) as ApiResponse<T>;
   };
 
-  const fetchMoveCandidates = (unitId: UnitView["unitId"]) => {
+  const fetchBoardCandidates = (unitId: UnitView["unitId"]) => {
     setErrorMessage(null);
     startTransition(async () => {
-      const response = await postJson<{ candidates: readonly LocalDebugMoveCandidate[] }>(
-        "/debug/local-match/api/moves",
+      const [moveResponse, flagResponse] = await Promise.all([
+        postJson<{ candidates: readonly LocalDebugMoveCandidate[] }>(
+          "/debug/local-match/api/moves",
+          { viewerSide, unitId },
+        ),
+        postJson<{ candidates: readonly LocalDebugFlagAttackCandidate[] }>(
+          "/debug/local-match/api/flag-attacks",
+          { viewerSide, unitId },
+        ),
+      ]);
+
+      if (!moveResponse.ok) {
+        resetSelection();
+        setErrorMessage(moveResponse.error.message);
+        return;
+      }
+      if (!flagResponse.ok) {
+        resetSelection();
+        setErrorMessage(flagResponse.error.message);
+        return;
+      }
+
+      setSelectedUnitId(unitId);
+      setActionMode("move");
+      setCandidates([...moveResponse.value.candidates, ...flagResponse.value.candidates]);
+      setSelectedDestination(null);
+      setActionStep("destination");
+    });
+  };
+
+  const fetchReserveCandidates = (unitId: UnitView["unitId"]) => {
+    setErrorMessage(null);
+    startTransition(async () => {
+      const response = await postJson<{ candidates: readonly LocalDebugReserveCandidate[] }>(
+        "/debug/local-match/api/reserve-candidates",
         { viewerSide, unitId },
       );
 
@@ -311,9 +422,10 @@ export default function LocalMatchDebugClient({
       }
 
       setSelectedUnitId(unitId);
-      setCandidates(response.value.candidates);
+      setActionMode("deploy");
+      setCandidates(response.value.candidates.map((candidate) => ({ ...candidate, kind: "deploy" })));
       setSelectedDestination(null);
-      setMoveStep("destination");
+      setActionStep("destination");
     });
   };
 
@@ -332,21 +444,59 @@ export default function LocalMatchDebugClient({
     });
   };
 
-  const submitMove = () => {
+  const submitSelectedAction = () => {
+    if (actionMode === "concede") {
+      setErrorMessage(null);
+      startTransition(async () => {
+        const response = await postJson<LocalDebugViewResponse>(
+          "/debug/local-match/api/action",
+          {
+            actionType: "CONCEDE_MATCH",
+            viewerSide,
+            expectedStateVersion: view.stateVersion,
+            actionId: makeActionId(),
+          },
+        );
+
+        if (!response.ok) {
+          setErrorMessage(response.error.message);
+          return;
+        }
+
+        applyViewResponse(response.value);
+      });
+      return;
+    }
+
     if (selectedUnitId === null || selectedDestination === null) return;
+
+    const actionType =
+      selectedDestination.kind === "flag_attack"
+        ? "ATTACK_FLAG"
+        : selectedDestination.kind === "deploy"
+          ? "DEPLOY_RESERVE"
+          : "MOVE_UNIT";
+
+    const actionBody: Record<string, unknown> = {
+      actionType,
+      viewerSide,
+      unitId: selectedUnitId,
+      nextStance,
+      expectedStateVersion: view.stateVersion,
+      actionId: makeActionId(),
+    };
+
+    if (actionType === "ATTACK_FLAG") {
+      actionBody.target = selectedDestination.destination;
+    } else {
+      actionBody.destination = selectedDestination.destination;
+    }
 
     setErrorMessage(null);
     startTransition(async () => {
       const response = await postJson<LocalDebugViewResponse>(
-        "/debug/local-match/api/move",
-        {
-          viewerSide,
-          unitId: selectedUnitId,
-          destination: selectedDestination.destination,
-          nextStance,
-          expectedStateVersion: view.stateVersion,
-          actionId: `local-debug-action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        },
+        "/debug/local-match/api/action",
+        actionBody,
       );
 
       if (!response.ok) {
@@ -376,11 +526,14 @@ export default function LocalMatchDebugClient({
   };
 
   const handleCellClick = (unit: UnitView | null, destination: Coordinate) => {
+    if (isFinished) return;
+
     const candidate = candidatesByCoordinate.get(coordinateKey(destination));
 
-    if (moveStep === "destination" && candidate !== undefined) {
+    if (actionStep === "destination" && candidate !== undefined) {
       setSelectedDestination(candidate);
-      setMoveStep("stance");
+      setActionMode(candidate.kind === "deploy" ? "deploy" : candidate.kind === "flag_attack" ? "flag_attack" : "move");
+      setActionStep("stance");
       return;
     }
 
@@ -388,14 +541,25 @@ export default function LocalMatchDebugClient({
       unit !== null &&
       unit.ownerId === view.viewerId &&
       unit.status === "board" &&
-      isViewerTurn
+      canStartTurnAction
     ) {
-      fetchMoveCandidates(unit.unitId);
+      fetchBoardCandidates(unit.unitId);
       return;
     }
 
     resetSelection();
     setSelectedUnitId(unit?.unitId ?? null);
+  };
+
+  const confirmationText = (): string => {
+    if (actionMode === "concede") {
+      return "CONCEDE_MATCH: この対戦を投了し、相手を勝者にします。";
+    }
+    if (selectedUnitId === null || selectedDestination === null) {
+      return "候補マスを選択してください。";
+    }
+
+    return `${selectedDestination.kind === "flag_attack" ? "ATTACK_FLAG" : selectedDestination.kind === "deploy" ? "DEPLOY_RESERVE" : "MOVE_UNIT"}: ${compactId(selectedUnitId)} → ${toCoordinateLabel(selectedDestination.destination)} (${candidateLabel(selectedDestination)}) / ${nextStance}表示`;
   };
 
   return (
@@ -406,7 +570,7 @@ export default function LocalMatchDebugClient({
             Debug / Local Match
           </p>
           <h1 className="mt-2 text-2xl font-bold tracking-[0.08em] text-white">
-            MOVE_UNIT Debug
+            Local Actions Debug
           </h1>
           <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-300">
             <span>phase: {view.phase}</span>
@@ -418,6 +582,17 @@ export default function LocalMatchDebugClient({
             {data.stateStorageNote}
           </p>
         </header>
+
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
+          <h2 className="text-lg font-bold text-white">勝敗結果</h2>
+          {view.phase === "finished" ? (
+            <div className="mt-3 rounded-2xl border border-amber-300/40 bg-amber-400/10 p-3 text-sm text-amber-50">
+              winner: {winner?.side ?? "—"} / reason: {view.winReason ?? "—"}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-slate-400">対戦中です。</p>
+          )}
+        </section>
 
         <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-3">
           <div className="grid grid-cols-2 gap-2">
@@ -446,7 +621,7 @@ export default function LocalMatchDebugClient({
             })}
           </div>
           <p className="mt-3 text-xs leading-5 text-slate-400">
-            現在の視点: {viewerSide}。{isViewerTurn ? "自分の手番です。" : "相手の手番のため操作できません。"}
+            現在の視点: {viewerSide}。{isFinished ? "勝敗確定後のため盤面操作は停止しています。" : isViewerTurn ? "自分の手番です。" : "相手の手番です。投了のみ実行できます。"}
           </p>
         </section>
 
@@ -472,6 +647,8 @@ export default function LocalMatchDebugClient({
           <div className="mb-3 flex flex-wrap gap-2 text-[0.68rem] text-slate-300">
             <span className="rounded-full border border-cyan-300/50 px-2 py-1">○ 通常移動</span>
             <span className="rounded-full border border-rose-300/50 px-2 py-1">⚔ 戦闘候補</span>
+            <span className="rounded-full border border-emerald-300/50 px-2 py-1">配 リザーバー配置</span>
+            <span className="rounded-full border border-amber-200/60 px-2 py-1">旗 旗攻撃</span>
           </div>
           <div
             className="grid w-full grid-cols-8 gap-1"
@@ -490,28 +667,21 @@ export default function LocalMatchDebugClient({
                     key={`${cell.coordinate.row}:${cell.coordinate.col}`}
                     type="button"
                     onClick={() => handleCellClick(unit, cell.coordinate)}
-                    className={`relative aspect-square min-w-0 rounded-xl border p-1 text-[0.55rem] transition focus:outline-none focus:ring-2 focus:ring-cyan-300 ${
+                    disabled={isFinished}
+                    className={`relative aspect-square min-w-0 rounded-xl border p-1 text-[0.55rem] transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-70 ${
                       destinationSelected
                         ? "border-white bg-white/15"
-                        : candidate?.kind === "engage"
-                          ? "border-rose-300 bg-rose-500/20"
-                          : candidate?.kind === "move"
-                            ? "border-cyan-300 bg-cyan-400/15"
-                            : selected
-                              ? "border-white bg-white/10"
-                              : "border-slate-700 bg-slate-950/70 hover:border-slate-500"
+                        : selected
+                          ? "border-white bg-white/10"
+                          : candidateClasses(candidate)
                     }`}
                     aria-label={`cell ${toCoordinateLabel(cell.coordinate)}${
-                      candidate === undefined
-                        ? ""
-                        : candidate.kind === "engage"
-                          ? " combat candidate"
-                          : " move candidate"
+                      candidate === undefined ? "" : ` ${candidateLabel(candidate)}`
                     }`}
                   >
                     {candidate !== undefined ? (
                       <span className="absolute right-1 top-0.5 z-10 rounded-full bg-slate-950/80 px-1 text-[0.55rem] font-black text-white">
-                        {candidate.kind === "engage" ? "⚔" : "○"}
+                        {candidateMarker(candidate)}
                       </span>
                     ) : null}
                     {unit === null ? (
@@ -529,14 +699,19 @@ export default function LocalMatchDebugClient({
         </section>
 
         <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
-          <h2 className="text-lg font-bold text-white">MOVE_UNIT操作</h2>
+          <h2 className="text-lg font-bold text-white">操作確認</h2>
           <div className="mt-3 grid gap-2 text-sm text-slate-300">
+            <p>操作: {actionMode === "none" ? "—" : actionMode}</p>
             <p>選択中: {selectedUnitId === null ? "—" : compactId(selectedUnitId)}</p>
-            <p>候補数: 通常 {candidates.filter((candidate) => candidate.kind === "move").length} / 戦闘 {candidates.filter((candidate) => candidate.kind === "engage").length}</p>
-            <p>移動先: {selectedDestination === null ? "—" : `${toCoordinateLabel(selectedDestination.destination)} (${selectedDestination.kind})`}</p>
+            <p>
+              候補数: 通常 {candidates.filter((candidate) => candidate.kind === "move").length} / 戦闘 {candidates.filter((candidate) => candidate.kind === "engage").length} / 配置 {candidates.filter((candidate) => candidate.kind === "deploy").length} / 旗攻撃 {candidates.filter((candidate) => candidate.kind === "flag_attack").length}
+            </p>
+            <p>
+              対象: {selectedDestination === null ? "—" : `${toCoordinateLabel(selectedDestination.destination)} (${candidateLabel(selectedDestination)})`}
+            </p>
           </div>
 
-          {moveStep === "stance" || moveStep === "confirm" ? (
+          {actionStep === "stance" || actionStep === "confirm" ? (
             <div className="mt-4 grid gap-3">
               <div className="grid grid-cols-2 gap-2">
                 {(["attack", "defense"] as const).map((stance) => (
@@ -545,7 +720,7 @@ export default function LocalMatchDebugClient({
                     type="button"
                     onClick={() => {
                       setNextStance(stance);
-                      setMoveStep("confirm");
+                      setActionStep("confirm");
                     }}
                     className={`rounded-2xl border px-3 py-3 text-sm font-bold ${
                       nextStance === stance
@@ -557,13 +732,12 @@ export default function LocalMatchDebugClient({
                   </button>
                 ))}
               </div>
-              <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3 text-xs leading-5 text-slate-300">
-                {selectedUnitId === null || selectedDestination === null
-                  ? "移動先を選択してください。"
-                  : `${compactId(selectedUnitId)} を ${toCoordinateLabel(selectedDestination.destination)} へ ${selectedDestination.kind === "engage" ? "戦闘移動" : "通常移動"}し、${nextStance}表示にします。`}
-              </div>
             </div>
           ) : null}
+
+          <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/70 p-3 text-xs leading-5 text-slate-300">
+            {confirmationText()}
+          </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2">
             <button
@@ -575,8 +749,12 @@ export default function LocalMatchDebugClient({
             </button>
             <button
               type="button"
-              onClick={submitMove}
-              disabled={selectedUnitId === null || selectedDestination === null || isPending}
+              onClick={submitSelectedAction}
+              disabled={
+                isPending ||
+                (actionMode !== "concede" &&
+                  (selectedUnitId === null || selectedDestination === null || actionStep !== "confirm"))
+              }
               className="rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
               確認して実行
@@ -594,13 +772,41 @@ export default function LocalMatchDebugClient({
               <ReservePanel
                 view={view}
                 player={player}
-                onSelect={(unitId) => {
-                  resetSelection();
-                  setSelectedUnitId(unitId);
-                }}
+                selectedUnitId={selectedUnitId}
+                disabled={!canStartTurnAction}
+                onSelect={fetchReserveCandidates}
               />
             </div>
           ))}
+        </section>
+
+        <section className="rounded-3xl border border-rose-300/30 bg-rose-500/10 p-4">
+          <h2 className="text-lg font-bold text-rose-50">投了</h2>
+          <p className="mt-2 text-xs leading-5 text-rose-100/80">
+            activeフェーズなら自分の手番以外でもCONCEDE_MATCHを送信できます。確認後、相手が勝者になります。
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={!canConcede}
+              onClick={() => {
+                resetSelection();
+                setActionMode("concede");
+                setActionStep("confirm");
+              }}
+              className="rounded-2xl border border-rose-300/60 bg-rose-400/15 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              投了確認を開く
+            </button>
+            <button
+              type="button"
+              disabled={actionMode !== "concede" || isPending}
+              onClick={submitSelectedAction}
+              className="rounded-2xl border border-rose-200 bg-rose-500/25 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              CONCEDE_MATCH実行
+            </button>
+          </div>
         </section>
 
         <DetailPanel unit={selectedUnit} />
