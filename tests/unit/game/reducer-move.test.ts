@@ -14,7 +14,6 @@ import {
 } from "../../../src/game";
 import type {
   CardSnapshot,
-  GameAction,
   GameEventPayload,
   MatchPlayerState,
   MatchState,
@@ -187,16 +186,10 @@ describe("applyTacticalDuelAction unsupported actions", () => {
   it("rejects actions other than MOVE_UNIT and DEPLOY_RESERVE without mutating state", () => {
     const state = baseState();
     const before = cloneJson(state);
-    const concedeAction: GameAction = {
-      type: "CONCEDE_MATCH",
-      actionId: toActionId("concede-1"),
-      matchId,
-      actorId: playerA,
-      expectedStateVersion: 11,
-    };
+    const unsupportedAction = { type: "UNSUPPORTED_ACTION" as const };
 
     expectErrorCode(
-      applyTacticalDuelAction({ state, action: concedeAction, config }),
+      applyTacticalDuelAction({ state, action: unsupportedAction, config }),
       "UNSUPPORTED_ACTION",
     );
     expect(cloneJson(state)).toBe(before);
