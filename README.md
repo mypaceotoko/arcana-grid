@@ -11,11 +11,12 @@ ARCANA GRIDは、オンライン対戦型の戦略カードゲームとして開
 - TypeScript
 - Tailwind CSS
 - ESLint
+- Vitest
 - npm
 
 ## ローカル起動方法
 
-依存関係をインストールしてから、開発サーバーを起動します。
+依存関係をインストールしてから、開発サーバーを起動します。依存関係を固定する `package-lock.json` がある場合は `npm ci` も使用できます。
 
 ```bash
 npm install
@@ -31,6 +32,8 @@ npm run dev
 - `npm run start`: 本番ビルドを起動します。
 - `npm run lint`: ESLintを実行します。
 - `npm run typecheck`: TypeScriptの型チェックを実行します。
+- `npm run test`: Vitestのテストを1回実行します。
+- `npm run test:watch`: Vitestをウォッチモードで起動します。
 
 ## 今後の大まかな開発順序
 
@@ -39,3 +42,7 @@ npm run dev
 3. Supabase
 4. オンライン2人対戦
 5. カード管理
+
+## CI
+
+GitHub Actionsで `typecheck`、`lint`、`test`、`build` を実行します。`package-lock.json` がある場合は `npm ci`、ない場合は `npm install` で依存関係をインストールします。
