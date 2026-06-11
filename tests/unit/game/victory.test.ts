@@ -73,6 +73,7 @@ const player = ({
   reserveUnitIds: [],
   flag: flag(flagOwnerId, damage, maxDamage),
   connected: true,
+  setupSubmitted: false,
 });
 
 const unit = ({

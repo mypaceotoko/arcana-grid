@@ -67,6 +67,12 @@ export type ReserveDeployedEvent = BaseGameEvent & {
   stance: Stance;
 };
 
+export type InitialPlacementSubmittedEvent = BaseGameEvent & {
+  type: "INITIAL_PLACEMENT_SUBMITTED";
+  playerId: MatchPlayerId;
+  unitCount: number;
+};
+
 export type TurnChangedEvent = BaseGameEvent & {
   type: "TURN_CHANGED";
   previousPlayerId: MatchPlayerId | null;
@@ -89,6 +95,7 @@ export type GameEvent =
   | DefenseChangedEvent
   | FlagDamagedEvent
   | ReserveDeployedEvent
+  | InitialPlacementSubmittedEvent
   | TurnChangedEvent
   | MatchFinishedEvent;
 
@@ -114,6 +121,10 @@ export type ReserveDeployedEventPayload = Omit<
   ReserveDeployedEvent,
   keyof BaseGameEvent
 >;
+export type InitialPlacementSubmittedEventPayload = Omit<
+  InitialPlacementSubmittedEvent,
+  keyof BaseGameEvent
+>;
 export type TurnChangedEventPayload = Omit<TurnChangedEvent, keyof BaseGameEvent>;
 export type MatchFinishedEventPayload = Omit<
   MatchFinishedEvent,
@@ -128,5 +139,6 @@ export type GameEventPayload =
   | DefenseChangedEventPayload
   | FlagDamagedEventPayload
   | ReserveDeployedEventPayload
+  | InitialPlacementSubmittedEventPayload
   | TurnChangedEventPayload
   | MatchFinishedEventPayload;

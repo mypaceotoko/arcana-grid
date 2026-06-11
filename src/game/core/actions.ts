@@ -40,7 +40,7 @@ export type SubmitInitialPlacementAction = {
   actionId: ActionId;
   matchId: MatchId;
   actorId: MatchPlayerId;
-  placements: InitialPlacement[];
+  placements: readonly InitialPlacement[];
   expectedStateVersion: number;
 };
 
