@@ -172,14 +172,23 @@ describe("orthogonal movement", () => {
     ]);
   });
 
-  it("passes through friendly units but cannot stop on them", () => {
+  it("excludes friendly squares from move candidates", () => {
     const actor = unit({ id: "actor" });
     const friendly = unit({ id: "friendly", position: { row: 3, col: 4 } });
     const moves = movesFor(actor, [actor, friendly]);
 
     expect(destinations(moves)).not.toContainEqual({ row: 3, col: 4 });
-    expect(destinations(moves)).toContainEqual({ row: 3, col: 5 });
-    expect(destinations(moves)).toContainEqual({ row: 3, col: 7 });
+  });
+
+  it("allows movement to empty squares beyond friendly units", () => {
+    const actor = unit({ id: "actor" });
+    const friendly = unit({ id: "friendly", position: { row: 2, col: 3 } });
+    const moves = movesFor(actor, [actor, friendly]);
+
+    expect(destinations(moves)).not.toContainEqual({ row: 2, col: 3 });
+    expect(destinations(moves)).toContainEqual({ row: 1, col: 3 });
+    expect(destinations(moves)).toContainEqual({ row: 0, col: 3 });
+    expectSorted(moves);
   });
 
   it("includes enemy squares as engage and blocks beyond them", () => {
@@ -393,6 +402,7 @@ describe("movement common validation and determinism", () => {
     const moves = movesFor(actor, units, duplicateRule);
 
     expect(moves).toEqual([
+      { destination: { row: 1, col: 3 }, kind: "move" },
       { destination: { row: 2, col: 3 }, kind: "move" },
       { destination: { row: 3, col: 4 }, kind: "move" },
       { destination: { row: 3, col: 5 }, kind: "move" },
