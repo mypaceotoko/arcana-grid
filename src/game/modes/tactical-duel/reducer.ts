@@ -3,7 +3,9 @@ import type {
   GameAction,
   GameEventPayload,
   MatchPlayerId,
+  MatchPlayerState,
   MatchState,
+  DeployReserveAction,
   MoveUnitAction,
   Result,
   RuleError,
@@ -13,6 +15,7 @@ import type {
 } from "../../core";
 import { areCoordinatesEqual, isInsideBoard } from "../../core";
 import { resolveCombat } from "./combat";
+import { deployReserveUnit } from "./reserve";
 import { isCoordinateInFlagArea } from "./flag";
 import { calculateLegalMoves, type LegalMove } from "./movement";
 import type { TacticalRuleConfig } from "./types";
@@ -30,16 +33,38 @@ type ApplyMoveUnitActionInput = {
   config: TacticalRuleConfig;
 };
 
+export type ApplyDeployReserveActionInput = {
+  state: MatchState;
+  action: DeployReserveAction;
+  config: TacticalRuleConfig;
+};
+
 type ApplyTacticalDuelActionInput = {
   state: MatchState;
   action: GameAction;
   config: TacticalRuleConfig;
 };
 
-type ValidatedMoveInput = {
+type ValidatedCommonActionInput = {
+  actor: MatchPlayerState;
   opponentId: MatchPlayerId;
+};
+
+type ValidatedMoveInput = ValidatedCommonActionInput & {
   unit: UnitState;
   origin: Coordinate;
+};
+
+type ValidatedDeployReserveInput = ValidatedCommonActionInput & {
+  unit: UnitState;
+};
+
+type CommonActionValidationInput = {
+  state: MatchState;
+  action: Pick<
+    MoveUnitAction | DeployReserveAction,
+    "matchId" | "actorId" | "expectedStateVersion" | "type"
+  >;
 };
 
 const makeRuleError = (
@@ -63,8 +88,8 @@ const findUnitsById = (
 
 const validatePlayers = (
   state: MatchState,
-  action: MoveUnitAction,
-): Result<MatchPlayerId, RuleError> => {
+  action: Pick<MoveUnitAction | DeployReserveAction, "actorId">,
+): Result<ValidatedCommonActionInput, RuleError> => {
   if (state.players.length !== 2) {
     return {
       ok: false,
@@ -91,7 +116,9 @@ const validatePlayers = (
     playerIds.add(player.id);
   }
 
-  if (!playerIds.has(action.actorId)) {
+  const actor = state.players.find((player) => player.id === action.actorId);
+
+  if (actor === undefined) {
     return {
       ok: false,
       error: makeRuleError(
@@ -102,7 +129,13 @@ const validatePlayers = (
     };
   }
 
-  return getOpponentPlayerId(state.players, action.actorId);
+  const opponentResult = getOpponentPlayerId(state.players, action.actorId);
+
+  if (!opponentResult.ok) {
+    return opponentResult;
+  }
+
+  return { ok: true, value: { actor, opponentId: opponentResult.value } };
 };
 
 const validateUniqueUnitIds = (
@@ -126,10 +159,10 @@ const validateUniqueUnitIds = (
   return { ok: true, value: true };
 };
 
-const validateMoveAction = ({
+const validateCommonAction = ({
   state,
   action,
-}: ApplyMoveUnitActionInput): Result<ValidatedMoveInput, RuleError> => {
+}: CommonActionValidationInput): Result<ValidatedCommonActionInput, RuleError> => {
   if (state.id !== action.matchId) {
     return {
       ok: false,
@@ -146,7 +179,7 @@ const validateMoveAction = ({
       ok: false,
       error: makeRuleError(
         "UNSUPPORTED_GAME_MODE",
-        "MOVE_UNIT is only supported for tactical_duel matches.",
+        `${action.type} is only supported for tactical_duel matches.`,
         { gameMode: state.gameMode },
       ),
     };
@@ -155,7 +188,7 @@ const validateMoveAction = ({
   if (state.phase === "finished" || state.winnerPlayerId !== null) {
     return {
       ok: false,
-      error: makeRuleError("MATCH_FINISHED", "Finished matches cannot move units.", {
+      error: makeRuleError("MATCH_FINISHED", "Finished matches cannot accept actions.", {
         phase: state.phase,
         winnerPlayerId: state.winnerPlayerId,
       }),
@@ -165,7 +198,7 @@ const validateMoveAction = ({
   if (state.phase !== "active") {
     return {
       ok: false,
-      error: makeRuleError("INVALID_PHASE", "MOVE_UNIT requires active phase.", {
+      error: makeRuleError("INVALID_PHASE", `${action.type} requires active phase.`, {
         phase: state.phase,
       }),
     };
@@ -205,9 +238,17 @@ const validateMoveAction = ({
     };
   }
 
-  const opponentResult = validatePlayers(state, action);
-  if (!opponentResult.ok) {
-    return opponentResult;
+  return validatePlayers(state, action);
+};
+
+const validateMoveAction = (
+  input: ApplyMoveUnitActionInput,
+): Result<ValidatedMoveInput, RuleError> => {
+  const { state, action } = input;
+  const commonResult = validateCommonAction(input);
+
+  if (!commonResult.ok) {
+    return commonResult;
   }
 
   const uniqueUnitsResult = validateUniqueUnitIds(state.units);
@@ -297,11 +338,110 @@ const validateMoveAction = ({
   return {
     ok: true,
     value: {
-      opponentId: opponentResult.value,
+      ...commonResult.value,
       unit,
       origin: cloneCoordinate(unit.position),
     },
   };
+};
+
+const validateDeployReserveAction = (
+  input: ApplyDeployReserveActionInput,
+): Result<ValidatedDeployReserveInput, RuleError> => {
+  const { state, action } = input;
+  const commonResult = validateCommonAction(input);
+
+  if (!commonResult.ok) {
+    return commonResult;
+  }
+
+  const uniqueUnitsResult = validateUniqueUnitIds(state.units);
+  if (!uniqueUnitsResult.ok) {
+    return uniqueUnitsResult;
+  }
+
+  const targetUnits = findUnitsById(state.units, action.unitId);
+  if (targetUnits.length === 0) {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_NOT_FOUND", "Reserve unit was not found.", {
+        unitId: action.unitId,
+      }),
+    };
+  }
+
+  if (targetUnits.length > 1) {
+    return {
+      ok: false,
+      error: makeRuleError("DUPLICATE_UNIT", "Unit ids must be unique.", {
+        unitId: action.unitId,
+      }),
+    };
+  }
+
+  const unit = targetUnits[0];
+
+  if (unit.ownerId !== action.actorId) {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_NOT_OWNED", "Actor does not own the reserve unit.", {
+        unitId: unit.id,
+        ownerId: unit.ownerId,
+        actorId: action.actorId,
+      }),
+    };
+  }
+
+  if (unit.status === "defeated") {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_DEFEATED", "Defeated units cannot be deployed.", {
+        unitId: unit.id,
+      }),
+    };
+  }
+
+  if (unit.status !== "reserve") {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_NOT_IN_RESERVE", "Only reserve units can be deployed.", {
+        unitId: unit.id,
+        status: unit.status,
+      }),
+    };
+  }
+
+  if (unit.position !== null) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "UNIT_NOT_IN_RESERVE",
+        "Reserve units must not already have a board position.",
+        { unitId: unit.id, position: unit.position },
+      ),
+    };
+  }
+
+  if (!isInsideBoard(action.destination, state.boardSize)) {
+    return {
+      ok: false,
+      error: makeRuleError("OUT_OF_BOUNDS", "Destination is outside board.", {
+        destination: action.destination,
+        boardSize: state.boardSize,
+      }),
+    };
+  }
+
+  if (!isValidStance(action.stance)) {
+    return {
+      ok: false,
+      error: makeRuleError("INVALID_ACTION", "stance must be attack or defense.", {
+        stance: action.stance,
+      }),
+    };
+  }
+
+  return { ok: true, value: { ...commonResult.value, unit } };
 };
 
 const isDestinationFlagArea = (
@@ -617,23 +757,62 @@ export const applyMoveUnitAction = (
   return applyCombatMove({ ...input, validated: validationResult.value });
 };
 
+export const applyDeployReserveAction = (
+  input: ApplyDeployReserveActionInput,
+): Result<TacticalDuelActionResult, RuleError> => {
+  const validationResult = validateDeployReserveAction(input);
+
+  if (!validationResult.ok) {
+    return validationResult;
+  }
+
+  const deploymentResult = deployReserveUnit({
+    player: validationResult.value.actor,
+    unit: validationResult.value.unit,
+    units: input.state.units,
+    destination: input.action.destination,
+    stance: input.action.stance,
+    boardSize: input.state.boardSize,
+    config: input.config,
+  });
+
+  if (!deploymentResult.ok) {
+    return deploymentResult;
+  }
+
+  const nextState: MatchState = {
+    ...input.state,
+    units: replaceUnits(input.state.units, [deploymentResult.value.unit]),
+    unitVisibilities: input.state.unitVisibilities,
+  };
+
+  return finalizeSuccessfulAction(nextState, deploymentResult.value.events);
+};
+
 export const applyTacticalDuelAction = (
   input: ApplyTacticalDuelActionInput,
 ): Result<TacticalDuelActionResult, RuleError> => {
-  if (input.action.type !== "MOVE_UNIT") {
-    return {
-      ok: false,
-      error: makeRuleError(
-        "UNSUPPORTED_ACTION",
-        "Only MOVE_UNIT is supported by this reducer task.",
-        { actionType: input.action.type },
-      ),
-    };
+  switch (input.action.type) {
+    case "MOVE_UNIT":
+      return applyMoveUnitAction({
+        state: input.state,
+        action: input.action,
+        config: input.config,
+      });
+    case "DEPLOY_RESERVE":
+      return applyDeployReserveAction({
+        state: input.state,
+        action: input.action,
+        config: input.config,
+      });
+    default:
+      return {
+        ok: false,
+        error: makeRuleError(
+          "UNSUPPORTED_ACTION",
+          "Action is not supported by the tactical_duel reducer.",
+          { actionType: input.action.type },
+        ),
+      };
   }
-
-  return applyMoveUnitAction({
-    state: input.state,
-    action: input.action,
-    config: input.config,
-  });
 };
