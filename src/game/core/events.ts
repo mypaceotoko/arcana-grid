@@ -3,6 +3,7 @@ import type {
   EventId,
   MatchId,
   MatchPlayerId,
+  Stance,
   UnitId,
   WinReason,
 } from "./types";
@@ -56,6 +57,14 @@ export type FlagDamagedEvent = BaseGameEvent & {
   maxDamage: number;
 };
 
+export type ReserveDeployedEvent = BaseGameEvent & {
+  type: "RESERVE_DEPLOYED";
+  unitId: UnitId;
+  ownerId: MatchPlayerId;
+  destination: Coordinate;
+  stance: Stance;
+};
+
 export type TurnChangedEvent = BaseGameEvent & {
   type: "TURN_CHANGED";
   previousPlayerId: MatchPlayerId | null;
@@ -77,6 +86,7 @@ export type GameEvent =
   | UnitDefeatedEvent
   | DefenseChangedEvent
   | FlagDamagedEvent
+  | ReserveDeployedEvent
   | TurnChangedEvent
   | MatchFinishedEvent;
 
@@ -98,6 +108,10 @@ export type DefenseChangedEventPayload = Omit<
   keyof BaseGameEvent
 >;
 export type FlagDamagedEventPayload = Omit<FlagDamagedEvent, keyof BaseGameEvent>;
+export type ReserveDeployedEventPayload = Omit<
+  ReserveDeployedEvent,
+  keyof BaseGameEvent
+>;
 export type TurnChangedEventPayload = Omit<TurnChangedEvent, keyof BaseGameEvent>;
 export type MatchFinishedEventPayload = Omit<
   MatchFinishedEvent,
@@ -111,5 +125,6 @@ export type GameEventPayload =
   | UnitDefeatedEventPayload
   | DefenseChangedEventPayload
   | FlagDamagedEventPayload
+  | ReserveDeployedEventPayload
   | TurnChangedEventPayload
   | MatchFinishedEventPayload;
