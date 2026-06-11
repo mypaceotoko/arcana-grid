@@ -87,6 +87,12 @@ export type MatchFinishedEvent = BaseGameEvent & {
   reason: Extract<WinReason, "flag_destroyed" | "annihilation">;
 };
 
+export type MatchStartedEvent = BaseGameEvent & {
+  type: "MATCH_STARTED";
+  firstPlayerId: MatchPlayerId;
+  turnNumber: number;
+};
+
 export type GameEvent =
   | UnitMovedEvent
   | UnitRevealedEvent
@@ -97,7 +103,8 @@ export type GameEvent =
   | ReserveDeployedEvent
   | InitialPlacementSubmittedEvent
   | TurnChangedEvent
-  | MatchFinishedEvent;
+  | MatchFinishedEvent
+  | MatchStartedEvent;
 
 export type UnitMovedEventPayload = Omit<UnitMovedEvent, keyof BaseGameEvent>;
 export type UnitRevealedEventPayload = Omit<
@@ -130,6 +137,10 @@ export type MatchFinishedEventPayload = Omit<
   MatchFinishedEvent,
   keyof BaseGameEvent
 >;
+export type MatchStartedEventPayload = Omit<
+  MatchStartedEvent,
+  keyof BaseGameEvent
+>;
 
 export type GameEventPayload =
   | UnitMovedEventPayload
@@ -141,4 +152,5 @@ export type GameEventPayload =
   | ReserveDeployedEventPayload
   | InitialPlacementSubmittedEventPayload
   | TurnChangedEventPayload
-  | MatchFinishedEventPayload;
+  | MatchFinishedEventPayload
+  | MatchStartedEventPayload;
