@@ -1,5 +1,6 @@
+export * from "./board";
 export type * from "./actions";
-export type * from "./coordinates";
+export * from "./coordinates";
 export type * from "./errors";
 export type * from "./events";
 export type * from "./state";

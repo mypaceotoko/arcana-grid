@@ -5,6 +5,8 @@ export type RuleErrorCode =
   | "UNIT_NOT_FOUND"
   | "UNIT_NOT_OWNED"
   | "UNIT_DEFEATED"
+  | "UNIT_NOT_ON_BOARD"
+  | "INVALID_MOVEMENT_RULE"
   | "OUT_OF_BOUNDS"
   | "ILLEGAL_MOVE"
   | "PATH_BLOCKED"
