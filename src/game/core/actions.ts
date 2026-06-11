@@ -18,6 +18,17 @@ export type MoveUnitAction = {
   expectedStateVersion: number;
 };
 
+export type AttackFlagAction = {
+  type: "ATTACK_FLAG";
+  actionId: ActionId;
+  matchId: MatchId;
+  actorId: MatchPlayerId;
+  unitId: UnitId;
+  target: Coordinate;
+  nextStance: Stance;
+  expectedStateVersion: number;
+};
+
 export type DeployReserveAction = {
   type: "DEPLOY_RESERVE";
   actionId: ActionId;
@@ -54,6 +65,7 @@ export type ConcedeMatchAction = {
 
 export type GameAction =
   | MoveUnitAction
+  | AttackFlagAction
   | DeployReserveAction
   | SubmitInitialPlacementAction
   | ConcedeMatchAction;
