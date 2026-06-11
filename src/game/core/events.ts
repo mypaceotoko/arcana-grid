@@ -65,8 +65,9 @@ export type TurnChangedEvent = BaseGameEvent & {
 
 export type MatchFinishedEvent = BaseGameEvent & {
   type: "MATCH_FINISHED";
-  winnerPlayerId: MatchPlayerId | null;
-  winReason: WinReason;
+  winnerPlayerId: MatchPlayerId;
+  loserPlayerId: MatchPlayerId;
+  reason: Extract<WinReason, "flag_destroyed" | "annihilation">;
 };
 
 export type GameEvent =

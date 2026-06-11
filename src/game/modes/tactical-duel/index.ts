@@ -8,3 +8,5 @@ export * from "./visibility";
 export * from "./player-view";
 export * from "./flag";
 export type * from "./flag-types";
+export * from "./victory";
+export type * from "./victory-types";
