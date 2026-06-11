@@ -20,10 +20,13 @@ export type UnitMovedEvent = BaseGameEvent & {
   to: Coordinate;
 };
 
+export type RevealReason = "first_move" | "attacked";
+
 export type UnitRevealedEvent = BaseGameEvent & {
   type: "UNIT_REVEALED";
   unitId: UnitId;
-  revealedTo: MatchPlayerId[];
+  viewerId: MatchPlayerId;
+  reason: RevealReason;
 };
 
 export type CombatResolvedEvent = BaseGameEvent & {

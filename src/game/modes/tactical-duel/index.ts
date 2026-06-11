@@ -4,3 +4,5 @@ export * from "./movement";
 export * from "./placement";
 export * from "./combat";
 export type * from "./combat-types";
+export * from "./visibility";
+export * from "./player-view";

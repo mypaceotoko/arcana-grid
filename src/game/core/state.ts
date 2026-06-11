@@ -125,7 +125,7 @@ export type PlayerMatchView = {
   rulesVersion: RulesVersion;
   boardSize: BoardSize;
   phase: MatchPhase;
-  viewerPlayerId: MatchPlayerId;
+  viewerId: MatchPlayerId;
   players: MatchPlayerState[];
   units: UnitView[];
   currentTurnPlayerId: MatchPlayerId | null;
