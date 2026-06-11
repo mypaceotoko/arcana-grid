@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            package.json
+
+      - name: Install dependencies with lockfile
+        if: hashFiles('package-lock.json') != ''
+        run: npm ci
+
+      - name: Install dependencies without lockfile
+        if: hashFiles('package-lock.json') == ''
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Show runtime versions
+        run: |
+          node --version
+          npm --version
+          npm ls vitest vite @vitest/runner @vitest/utils @vitest/expect @vitest/snapshot tinypool || true
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
