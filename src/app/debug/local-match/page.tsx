@@ -1,14 +1,9 @@
 import { notFound } from "next/navigation";
 
-import { buildPlayerMatchView } from "@/game";
 import type { PlayerSide } from "@/game";
 
+import { getLocalDebugMatchView } from "./harness";
 import LocalMatchDebugClient from "./ui";
-import {
-  LOCAL_DEBUG_CARD_BACK_KEY,
-  LOCAL_DEBUG_MATCH_PLAYER_IDS,
-  localDebugMatchState,
-} from "./fixture";
 
 export const dynamic = "force-dynamic";
 
@@ -34,20 +29,15 @@ export default async function LocalMatchDebugPage({
 
   const params = await searchParams;
   const viewerSide = parseViewerSide(params?.viewer);
-  const viewerId = LOCAL_DEBUG_MATCH_PLAYER_IDS[viewerSide];
-  const view = buildPlayerMatchView({
-    state: localDebugMatchState,
-    viewerId,
-    cardBackKey: LOCAL_DEBUG_CARD_BACK_KEY,
-  });
+  const response = getLocalDebugMatchView(viewerSide);
 
-  if (!view.ok) {
+  if (!response.ok) {
     throw new Error("Failed to build local debug player view.");
   }
 
   return (
     <LocalMatchDebugClient
-      view={view.value}
+      initialData={response.value}
       viewerOptions={[
         { side: "south", href: "/debug/local-match?viewer=south" },
         { side: "north", href: "/debug/local-match?viewer=north" },
