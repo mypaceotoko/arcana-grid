@@ -6,3 +6,5 @@ export * from "./combat";
 export type * from "./combat-types";
 export * from "./visibility";
 export * from "./player-view";
+export * from "./flag";
+export type * from "./flag-types";
