@@ -5,6 +5,7 @@ import type {
   MatchPlayerId,
   MatchPlayerState,
   MatchState,
+  ConcedeMatchAction,
   DeployReserveAction,
   MoveUnitAction,
   SubmitInitialPlacementAction,
@@ -55,9 +56,19 @@ export type ApplySubmitInitialPlacementActionInput = {
   config: TacticalRuleConfig;
 };
 
+export type ApplyConcedeMatchActionInput = {
+  state: MatchState;
+  action: ConcedeMatchAction;
+  config: TacticalRuleConfig;
+};
+
+type UnsupportedTacticalDuelAction = {
+  type: "UNSUPPORTED_ACTION";
+};
+
 type ApplyTacticalDuelActionInput = {
   state: MatchState;
-  action: GameAction;
+  action: GameAction | UnsupportedTacticalDuelAction;
   config: TacticalRuleConfig;
 };
 
@@ -83,9 +94,10 @@ type ValidatedSubmitInitialPlacementInput = {
 type CommonActionValidationInput = {
   state: MatchState;
   action: Pick<
-    MoveUnitAction | DeployReserveAction,
+    MoveUnitAction | DeployReserveAction | ConcedeMatchAction,
     "matchId" | "actorId" | "expectedStateVersion" | "type"
   >;
+  requireCurrentTurnActor: boolean;
 };
 
 const makeRuleError = (
@@ -109,7 +121,14 @@ const findUnitsById = (
 
 const validatePlayers = (
   state: MatchState,
-  action: Pick<MoveUnitAction | DeployReserveAction, "actorId">,
+  action: Pick<
+    MoveUnitAction | DeployReserveAction | ConcedeMatchAction,
+    "actorId"
+  >,
+  actorNotFoundCode: Extract<
+    RuleError["code"],
+    "NOT_YOUR_TURN" | "MATCH_PLAYER_NOT_FOUND"
+  >,
 ): Result<ValidatedCommonActionInput, RuleError> => {
   if (state.players.length !== 2) {
     return {
@@ -143,7 +162,7 @@ const validatePlayers = (
     return {
       ok: false,
       error: makeRuleError(
-        "NOT_YOUR_TURN",
+        actorNotFoundCode,
         "Actor must be one of the match players.",
         { actorId: action.actorId },
       ),
@@ -183,7 +202,11 @@ const validateUniqueUnitIds = (
 const validateCommonAction = ({
   state,
   action,
-}: CommonActionValidationInput): Result<ValidatedCommonActionInput, RuleError> => {
+  requireCurrentTurnActor,
+}: CommonActionValidationInput): Result<
+  ValidatedCommonActionInput,
+  RuleError
+> => {
   if (state.id !== action.matchId) {
     return {
       ok: false,
@@ -206,22 +229,35 @@ const validateCommonAction = ({
     };
   }
 
-  if (state.phase === "finished" || state.winnerPlayerId !== null) {
+  if (
+    state.phase === "finished" ||
+    state.winnerPlayerId !== null ||
+    state.winReason !== null
+  ) {
     return {
       ok: false,
-      error: makeRuleError("MATCH_FINISHED", "Finished matches cannot accept actions.", {
-        phase: state.phase,
-        winnerPlayerId: state.winnerPlayerId,
-      }),
+      error: makeRuleError(
+        "MATCH_FINISHED",
+        "Finished matches cannot accept actions.",
+        {
+          phase: state.phase,
+          winnerPlayerId: state.winnerPlayerId,
+          winReason: state.winReason,
+        },
+      ),
     };
   }
 
   if (state.phase !== "active") {
     return {
       ok: false,
-      error: makeRuleError("INVALID_PHASE", `${action.type} requires active phase.`, {
-        phase: state.phase,
-      }),
+      error: makeRuleError(
+        "INVALID_PHASE",
+        `${action.type} requires active phase.`,
+        {
+          phase: state.phase,
+        },
+      ),
     };
   }
 
@@ -235,13 +271,17 @@ const validateCommonAction = ({
     };
   }
 
-  if (state.currentTurnPlayerId !== action.actorId) {
+  if (requireCurrentTurnActor && state.currentTurnPlayerId !== action.actorId) {
     return {
       ok: false,
-      error: makeRuleError("NOT_YOUR_TURN", "Actor is not the current turn player.", {
-        actorId: action.actorId,
-        currentTurnPlayerId: state.currentTurnPlayerId,
-      }),
+      error: makeRuleError(
+        "NOT_YOUR_TURN",
+        "Actor is not the current turn player.",
+        {
+          actorId: action.actorId,
+          currentTurnPlayerId: state.currentTurnPlayerId,
+        },
+      ),
     };
   }
 
@@ -259,14 +299,21 @@ const validateCommonAction = ({
     };
   }
 
-  return validatePlayers(state, action);
+  return validatePlayers(
+    state,
+    action,
+    requireCurrentTurnActor ? "NOT_YOUR_TURN" : "MATCH_PLAYER_NOT_FOUND",
+  );
 };
 
 const validateMoveAction = (
   input: ApplyMoveUnitActionInput,
 ): Result<ValidatedMoveInput, RuleError> => {
   const { state, action } = input;
-  const commonResult = validateCommonAction(input);
+  const commonResult = validateCommonAction({
+    ...input,
+    requireCurrentTurnActor: true,
+  });
 
   if (!commonResult.ok) {
     return commonResult;
@@ -331,9 +378,13 @@ const validateMoveAction = (
   if (unit.position === null) {
     return {
       ok: false,
-      error: makeRuleError("UNIT_NOT_ON_BOARD", "Board units must have a position.", {
-        unitId: unit.id,
-      }),
+      error: makeRuleError(
+        "UNIT_NOT_ON_BOARD",
+        "Board units must have a position.",
+        {
+          unitId: unit.id,
+        },
+      ),
     };
   }
 
@@ -350,9 +401,13 @@ const validateMoveAction = (
   if (!isValidStance(action.nextStance)) {
     return {
       ok: false,
-      error: makeRuleError("INVALID_ACTION", "nextStance must be attack or defense.", {
-        nextStance: action.nextStance,
-      }),
+      error: makeRuleError(
+        "INVALID_ACTION",
+        "nextStance must be attack or defense.",
+        {
+          nextStance: action.nextStance,
+        },
+      ),
     };
   }
 
@@ -370,7 +425,10 @@ const validateDeployReserveAction = (
   input: ApplyDeployReserveActionInput,
 ): Result<ValidatedDeployReserveInput, RuleError> => {
   const { state, action } = input;
-  const commonResult = validateCommonAction(input);
+  const commonResult = validateCommonAction({
+    ...input,
+    requireCurrentTurnActor: true,
+  });
 
   if (!commonResult.ok) {
     return commonResult;
@@ -405,30 +463,42 @@ const validateDeployReserveAction = (
   if (unit.ownerId !== action.actorId) {
     return {
       ok: false,
-      error: makeRuleError("UNIT_NOT_OWNED", "Actor does not own the reserve unit.", {
-        unitId: unit.id,
-        ownerId: unit.ownerId,
-        actorId: action.actorId,
-      }),
+      error: makeRuleError(
+        "UNIT_NOT_OWNED",
+        "Actor does not own the reserve unit.",
+        {
+          unitId: unit.id,
+          ownerId: unit.ownerId,
+          actorId: action.actorId,
+        },
+      ),
     };
   }
 
   if (unit.status === "defeated") {
     return {
       ok: false,
-      error: makeRuleError("UNIT_DEFEATED", "Defeated units cannot be deployed.", {
-        unitId: unit.id,
-      }),
+      error: makeRuleError(
+        "UNIT_DEFEATED",
+        "Defeated units cannot be deployed.",
+        {
+          unitId: unit.id,
+        },
+      ),
     };
   }
 
   if (unit.status !== "reserve") {
     return {
       ok: false,
-      error: makeRuleError("UNIT_NOT_IN_RESERVE", "Only reserve units can be deployed.", {
-        unitId: unit.id,
-        status: unit.status,
-      }),
+      error: makeRuleError(
+        "UNIT_NOT_IN_RESERVE",
+        "Only reserve units can be deployed.",
+        {
+          unitId: unit.id,
+          status: unit.status,
+        },
+      ),
     };
   }
 
@@ -456,27 +526,37 @@ const validateDeployReserveAction = (
   if (!isValidStance(action.stance)) {
     return {
       ok: false,
-      error: makeRuleError("INVALID_ACTION", "stance must be attack or defense.", {
-        stance: action.stance,
-      }),
+      error: makeRuleError(
+        "INVALID_ACTION",
+        "stance must be attack or defense.",
+        {
+          stance: action.stance,
+        },
+      ),
     };
   }
 
   return { ok: true, value: { ...commonResult.value, unit } };
 };
 
-
 const validateSetupAction = ({
   state,
   action,
-}: ApplySubmitInitialPlacementActionInput): Result<MatchPlayerState, RuleError> => {
+}: ApplySubmitInitialPlacementActionInput): Result<
+  MatchPlayerState,
+  RuleError
+> => {
   if (state.id !== action.matchId) {
     return {
       ok: false,
-      error: makeRuleError("MATCH_ID_MISMATCH", "Action matchId must match state id.", {
-        stateMatchId: state.id,
-        actionMatchId: action.matchId,
-      }),
+      error: makeRuleError(
+        "MATCH_ID_MISMATCH",
+        "Action matchId must match state id.",
+        {
+          stateMatchId: state.id,
+          actionMatchId: action.matchId,
+        },
+      ),
     };
   }
 
@@ -491,14 +571,22 @@ const validateSetupAction = ({
     };
   }
 
-  if (state.phase === "finished" || state.winnerPlayerId !== null || state.winReason !== null) {
+  if (
+    state.phase === "finished" ||
+    state.winnerPlayerId !== null ||
+    state.winReason !== null
+  ) {
     return {
       ok: false,
-      error: makeRuleError("MATCH_FINISHED", "Finished matches cannot accept setup actions.", {
-        phase: state.phase,
-        winnerPlayerId: state.winnerPlayerId,
-        winReason: state.winReason,
-      }),
+      error: makeRuleError(
+        "MATCH_FINISHED",
+        "Finished matches cannot accept setup actions.",
+        {
+          phase: state.phase,
+          winnerPlayerId: state.winnerPlayerId,
+          winReason: state.winReason,
+        },
+      ),
     };
   }
 
@@ -557,9 +645,13 @@ const validateSetupAction = ({
     if (playerIds.has(player.id)) {
       return {
         ok: false,
-        error: makeRuleError("DUPLICATE_MATCH_PLAYER", "Match player ids must be unique.", {
-          playerId: player.id,
-        }),
+        error: makeRuleError(
+          "DUPLICATE_MATCH_PLAYER",
+          "Match player ids must be unique.",
+          {
+            playerId: player.id,
+          },
+        ),
       };
     }
 
@@ -574,9 +666,13 @@ const validateSetupAction = ({
   if (actor === null || actorCount !== 1) {
     return {
       ok: false,
-      error: makeRuleError("NOT_YOUR_TURN", "Actor must be one of the match players.", {
-        actorId: action.actorId,
-      }),
+      error: makeRuleError(
+        "NOT_YOUR_TURN",
+        "Actor must be one of the match players.",
+        {
+          actorId: action.actorId,
+        },
+      ),
     };
   }
 
@@ -619,10 +715,14 @@ const validateReserveUnitIds = (
     if (reserveSet.has(unitId)) {
       return {
         ok: false,
-        error: makeRuleError("INVALID_RESERVE_UNIT_IDS", "reserveUnitIds must be unique.", {
-          playerId: actor.id,
-          unitId,
-        }),
+        error: makeRuleError(
+          "INVALID_RESERVE_UNIT_IDS",
+          "reserveUnitIds must be unique.",
+          {
+            playerId: actor.id,
+            unitId,
+          },
+        ),
       };
     }
 
@@ -765,7 +865,11 @@ const validateSubmitInitialPlacementAction = (
   }
 
   const actor = setupResult.value;
-  const reserveResult = validateReserveUnitIds(actor, input.state.units, input.config);
+  const reserveResult = validateReserveUnitIds(
+    actor,
+    input.state.units,
+    input.config,
+  );
   if (!reserveResult.ok) {
     return reserveResult;
   }
@@ -802,10 +906,14 @@ const validateSubmitInitialPlacementAction = (
     if (!isValidStance(placement.stance)) {
       return {
         ok: false,
-        error: makeRuleError("INVALID_ACTION", "Initial placement stance must be valid.", {
-          unitId: placement.unitId,
-          stance: placement.stance,
-        }),
+        error: makeRuleError(
+          "INVALID_ACTION",
+          "Initial placement stance must be valid.",
+          {
+            unitId: placement.unitId,
+            stance: placement.stance,
+          },
+        ),
       };
     }
   }
@@ -815,8 +923,12 @@ const validateSubmitInitialPlacementAction = (
     return destinationResult;
   }
 
-  const ownedUnits = input.state.units.filter((unit) => unit.ownerId === actor.id);
-  const initialUnits = ownedUnits.filter((unit) => !reserveUnitIds.has(unit.id));
+  const ownedUnits = input.state.units.filter(
+    (unit) => unit.ownerId === actor.id,
+  );
+  const initialUnits = ownedUnits.filter(
+    (unit) => !reserveUnitIds.has(unit.id),
+  );
 
   if (initialUnits.length !== input.config.initialUnitCount) {
     return {
@@ -966,7 +1078,8 @@ const findLegalMove = (
   moves: readonly LegalMove[],
   destination: Coordinate,
 ): LegalMove | null =>
-  moves.find((move) => areCoordinatesEqual(move.destination, destination)) ?? null;
+  moves.find((move) => areCoordinatesEqual(move.destination, destination)) ??
+  null;
 
 const replaceUnits = (
   units: readonly UnitState[],
@@ -1179,7 +1292,10 @@ const applyCombatMove = ({
 
   const nextState: MatchState = {
     ...state,
-    units: replaceUnits(state.units, [nextAttacker, combatResult.value.defender]),
+    units: replaceUnits(state.units, [
+      nextAttacker,
+      combatResult.value.defender,
+    ]),
     unitVisibilities: [...defenderRevealResult.value.visibilities],
   };
 
@@ -1199,7 +1315,10 @@ export const applyMoveUnitAction = (
     return validationResult;
   }
 
-  const flagAreaResult = isDestinationFlagArea(input.state, input.action.destination);
+  const flagAreaResult = isDestinationFlagArea(
+    input.state,
+    input.action.destination,
+  );
 
   if (!flagAreaResult.ok) {
     return flagAreaResult;
@@ -1284,6 +1403,55 @@ export const applyDeployReserveAction = (
   return finalizeSuccessfulAction(nextState, deploymentResult.value.events);
 };
 
+const validateConcedeMatchAction = (
+  input: ApplyConcedeMatchActionInput,
+): Result<ValidatedCommonActionInput, RuleError> =>
+  validateCommonAction({
+    state: input.state,
+    action: input.action,
+    requireCurrentTurnActor: false,
+  });
+
+export const applyConcedeMatchAction = (
+  input: ApplyConcedeMatchActionInput,
+): Result<TacticalDuelActionResult, RuleError> => {
+  void input.config;
+
+  const validationResult = validateConcedeMatchAction(input);
+  if (!validationResult.ok) {
+    return validationResult;
+  }
+
+  const winnerPlayerId = validationResult.value.opponentId;
+  const loserPlayerId = input.action.actorId;
+
+  return {
+    ok: true,
+    value: {
+      state: {
+        ...input.state,
+        phase: "finished",
+        currentTurnPlayerId: null,
+        winnerPlayerId,
+        winReason: "concession",
+        stateVersion: input.state.stateVersion + 1,
+      },
+      events: [
+        {
+          type: "MATCH_CONCEDED",
+          concedingPlayerId: loserPlayerId,
+          winnerPlayerId,
+        },
+        {
+          type: "MATCH_FINISHED",
+          winnerPlayerId,
+          loserPlayerId,
+          reason: "concession",
+        },
+      ],
+    },
+  };
+};
 
 export const applySubmitInitialPlacementAction = (
   input: ApplySubmitInitialPlacementActionInput,
@@ -1364,6 +1532,12 @@ export const applyTacticalDuelAction = (
       });
     case "SUBMIT_INITIAL_PLACEMENT":
       return applySubmitInitialPlacementAction({
+        state: input.state,
+        action: input.action,
+        config: input.config,
+      });
+    case "CONCEDE_MATCH":
+      return applyConcedeMatchAction({
         state: input.state,
         action: input.action,
         config: input.config,

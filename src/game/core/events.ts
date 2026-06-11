@@ -80,11 +80,17 @@ export type TurnChangedEvent = BaseGameEvent & {
   turnNumber: number;
 };
 
+export type MatchConcededEvent = BaseGameEvent & {
+  type: "MATCH_CONCEDED";
+  concedingPlayerId: MatchPlayerId;
+  winnerPlayerId: MatchPlayerId;
+};
+
 export type MatchFinishedEvent = BaseGameEvent & {
   type: "MATCH_FINISHED";
   winnerPlayerId: MatchPlayerId;
   loserPlayerId: MatchPlayerId;
-  reason: Extract<WinReason, "flag_destroyed" | "annihilation">;
+  reason: Extract<WinReason, "flag_destroyed" | "annihilation" | "concession">;
 };
 
 export type MatchStartedEvent = BaseGameEvent & {
@@ -103,6 +109,7 @@ export type GameEvent =
   | ReserveDeployedEvent
   | InitialPlacementSubmittedEvent
   | TurnChangedEvent
+  | MatchConcededEvent
   | MatchFinishedEvent
   | MatchStartedEvent;
 
@@ -123,7 +130,10 @@ export type DefenseChangedEventPayload = Omit<
   DefenseChangedEvent,
   keyof BaseGameEvent
 >;
-export type FlagDamagedEventPayload = Omit<FlagDamagedEvent, keyof BaseGameEvent>;
+export type FlagDamagedEventPayload = Omit<
+  FlagDamagedEvent,
+  keyof BaseGameEvent
+>;
 export type ReserveDeployedEventPayload = Omit<
   ReserveDeployedEvent,
   keyof BaseGameEvent
@@ -132,7 +142,14 @@ export type InitialPlacementSubmittedEventPayload = Omit<
   InitialPlacementSubmittedEvent,
   keyof BaseGameEvent
 >;
-export type TurnChangedEventPayload = Omit<TurnChangedEvent, keyof BaseGameEvent>;
+export type TurnChangedEventPayload = Omit<
+  TurnChangedEvent,
+  keyof BaseGameEvent
+>;
+export type MatchConcededEventPayload = Omit<
+  MatchConcededEvent,
+  keyof BaseGameEvent
+>;
 export type MatchFinishedEventPayload = Omit<
   MatchFinishedEvent,
   keyof BaseGameEvent
@@ -152,5 +169,6 @@ export type GameEventPayload =
   | ReserveDeployedEventPayload
   | InitialPlacementSubmittedEventPayload
   | TurnChangedEventPayload
+  | MatchConcededEventPayload
   | MatchFinishedEventPayload
   | MatchStartedEventPayload;

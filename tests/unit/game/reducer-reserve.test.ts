@@ -18,7 +18,6 @@ import {
 import type {
   CardSnapshot,
   DeployReserveAction,
-  GameAction,
   GameEventPayload,
   MatchPlayerState,
   MatchState,
@@ -226,13 +225,7 @@ describe("applyTacticalDuelAction reserve branch", () => {
     );
     expect(eventTypes(deployed.events)).toEqual(["RESERVE_DEPLOYED", "TURN_CHANGED"]);
 
-    const unsupported: GameAction = {
-      type: "CONCEDE_MATCH",
-      actionId: toActionId("concede-1"),
-      matchId,
-      actorId: playerA,
-      expectedStateVersion: 9,
-    };
+    const unsupported = { type: "UNSUPPORTED_ACTION" as const };
     expectErrorCode(
       applyTacticalDuelAction({ state: baseState(), action: unsupported, config }),
       "UNSUPPORTED_ACTION",

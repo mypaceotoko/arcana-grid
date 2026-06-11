@@ -16,7 +16,6 @@ import {
 } from "../../../src/game";
 import type {
   CardSnapshot,
-  GameAction,
   InitialPlacement,
   MatchPlayerState,
   MatchState,
@@ -205,13 +204,7 @@ describe("applyTacticalDuelAction initial placement branch", () => {
       }).ok,
     ).toBe(true);
 
-    const unsupported: GameAction = {
-      type: "CONCEDE_MATCH",
-      actionId: toActionId("concede-1"),
-      matchId,
-      actorId: north,
-      expectedStateVersion: 3,
-    };
+    const unsupported = { type: "UNSUPPORTED_ACTION" as const };
     expectErrorCode(applyTacticalDuelAction({ state: baseState(), action: unsupported, config }), "UNSUPPORTED_ACTION");
   });
 });
