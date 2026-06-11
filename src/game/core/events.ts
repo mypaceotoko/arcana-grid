@@ -17,8 +17,10 @@ export type BaseGameEvent = {
 export type UnitMovedEvent = BaseGameEvent & {
   type: "UNIT_MOVED";
   unitId: UnitId;
+  ownerId: MatchPlayerId;
   from: Coordinate | null;
   to: Coordinate;
+  stance: Stance;
 };
 
 export type RevealReason = "first_move" | "attacked";
