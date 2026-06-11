@@ -73,3 +73,37 @@ export type GameEvent =
   | FlagDamagedEvent
   | TurnChangedEvent
   | MatchFinishedEvent;
+
+export type UnitMovedEventPayload = Omit<UnitMovedEvent, keyof BaseGameEvent>;
+export type UnitRevealedEventPayload = Omit<
+  UnitRevealedEvent,
+  keyof BaseGameEvent
+>;
+export type CombatResolvedEventPayload = Omit<
+  CombatResolvedEvent,
+  keyof BaseGameEvent
+>;
+export type UnitDefeatedEventPayload = Omit<
+  UnitDefeatedEvent,
+  keyof BaseGameEvent
+>;
+export type DefenseChangedEventPayload = Omit<
+  DefenseChangedEvent,
+  keyof BaseGameEvent
+>;
+export type FlagDamagedEventPayload = Omit<FlagDamagedEvent, keyof BaseGameEvent>;
+export type TurnChangedEventPayload = Omit<TurnChangedEvent, keyof BaseGameEvent>;
+export type MatchFinishedEventPayload = Omit<
+  MatchFinishedEvent,
+  keyof BaseGameEvent
+>;
+
+export type GameEventPayload =
+  | UnitMovedEventPayload
+  | UnitRevealedEventPayload
+  | CombatResolvedEventPayload
+  | UnitDefeatedEventPayload
+  | DefenseChangedEventPayload
+  | FlagDamagedEventPayload
+  | TurnChangedEventPayload
+  | MatchFinishedEventPayload;
