@@ -45,4 +45,4 @@ npm run dev
 
 ## CI
 
-GitHub Actionsで `typecheck`、`lint`、`test`、`build` を実行します。`package-lock.json` がある場合は `npm ci`、ない場合は `npm install` で依存関係をインストールします。依存関係はlockfile未生成時のCI再現性を高めるため、主要パッケージを具体的なバージョンで固定しています。
+GitHub Actionsで `typecheck`、`lint`、`test`、`build` を実行します。`package-lock.json` がある場合は `npm ci`、ない場合は `npm install` で依存関係をインストールします。依存関係はlockfile未生成時のCI再現性を高めるため、主要パッケージを具体的なバージョンで固定しています。CIはNode.js 20 LTSで実行し、Test前にVitest関連の解決バージョンを出力します。
