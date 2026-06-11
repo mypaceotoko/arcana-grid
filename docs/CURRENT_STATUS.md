@@ -4,10 +4,10 @@
 
 ## 確認したリポジトリ状態
 
-- ブランチ: `docs-persist-development-plan`
-- 作業開始時のローカルHEAD: `822352460b606cf3d5be0642038c932c935aeb7b`
+- ブランチ: `task-7b-local-move-interaction`
+- 作業開始時のローカルHEAD: `1a3131f`（Task 7Aのローカル対戦デバッグ盤面UI実装を含む履歴）
 - ローカルには `origin` remote と `main` ブランチが存在しなかったため、ネットワーク経由の最新main確認はできなかった。
-- この更新はドキュメント整備のみ。ゲームロジック、UI、依存関係は変更しない。
+- `AGENTS.md`、`README.md`、`docs/`、Task 7Aの `/debug/local-match`、既存ゲームエンジンとテストを確認してから実装した。
 
 ## 実装済み機能
 
@@ -27,27 +27,29 @@
 - 全滅、旗破壊、投了による終了処理。
 - stateVersionとexpectedStateVersionによる古い行動の拒否。
 - 秘密情報が相手ビューや主要イベントへ漏れないことを確認するテスト。
+- `/debug/local-match` の安全なPlayerMatchViewベース盤面表示。
+- `/debug/local-match` のデバッグ専用インメモリローカル対戦ハーネス。
+- 現在viewerの自分の盤面ユニット選択、サーバー側合法移動候補取得、通常移動/戦闘候補の区別表示、attack/defense選択、MOVE_UNIT実行、イベントログ、fixtureリセット。
 
 ## テスト状況
 
-- 最新確認時点のVitest結果: 18 test files / 325 tests passed。
-- 既存テストは `src/lib/project.test.ts` と `tests/unit/game/**/*.test.ts` にある。
-- 今回の最終確認では以下を実行する。
+- 最新確認時点のVitest結果: 20 test files / 338 tests passed。
+- 既存テストは `src/lib/project.test.ts`、`tests/unit/game/**/*.test.ts`、`tests/unit/debug/**/*.test.ts` にある。
+- 今回の最終確認で以下を実行済み。
   - `npm run typecheck`
-  - `npm run lint`
+  - `npm run lint`（既存の `tests/unit/game/types.test.ts` にwarning 1件あり）
   - `npm run test`
   - `npm run build`
+- 開発サーバーで `/debug/local-match?viewer=south`、状態取得、移動候補取得、MOVE_UNIT、リセット、HTML/JSONの未公開カード詳細混入なしをcurlで確認済み。
 
 ## 現在の次タスク
 
-- 次タスク: Task 7A。
-- 目的: ローカル対戦UIの最小設計を行い、画面構成・操作フロー・ルールエンジン呼び出し境界を文書化する。
-- 完了条件: UI実装前に、iPhone縦画面優先の画面構成と、UIが送る操作意図・受け取る公開ビューの境界が明確になっている。
+- 次タスク: Task 7C以降のローカル対戦UI拡張。
+- 今回未実装: DEPLOY_RESERVE操作、ATTACK_FLAG操作、CONCEDE_MATCH操作、初期配置操作、対戦開始操作、戦闘アニメーション、カード画像の本格導入、Supabase/Auth/Database/Realtime/オンライン対戦。
 
 ## 未実装項目
 
-- ローカル対戦UI。
-- Next.js画面からのルールエンジン連携。
+- ローカル対戦UIの初期配置、リザーブ配備、旗攻撃、投了操作。
 - Supabase基盤、migration、RLS、サーバー側ルール実行。
 - オンライン2人対戦、リアルタイム同期、再接続。
 - カードマスタと画像管理。
@@ -57,6 +59,6 @@
 ## 既知のwarning・注意事項
 
 - npm scripts実行時に `npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.` が表示される。各チェック自体は成功する。
-- `npm run build` 実行時にNext.jsが `tsconfig.json` / `next-env.d.ts` の候補更新を行う場合がある。今回のドキュメント整備ではコード・設定変更を含めないため、生成差分は確認後に戻した。
-- READMEには「ゲームルールはまだ実装していません」という古い説明が残っている。今回の対象は指定された開発ドキュメント整備のみのため、README本文は変更していない。
+- `npm run lint` で既存の `tests/unit/game/types.test.ts` に `@typescript-eslint/no-unused-expressions` warningが1件表示される。今回の変更によるerrorはない。
+- READMEには「ゲームルールはまだ実装していません」という古い説明が残っている。
 - remoteが未設定のため、この環境だけでは最新mainのfetch / pullは実行できない。
