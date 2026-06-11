@@ -32,6 +32,14 @@ export type UnitRevealedEvent = BaseGameEvent & {
   reason: RevealReason;
 };
 
+export type FlagAttackedEvent = BaseGameEvent & {
+  type: "FLAG_ATTACKED";
+  attackerUnitId: UnitId;
+  attackerPlayerId: MatchPlayerId;
+  defenderPlayerId: MatchPlayerId;
+  target: Coordinate;
+};
+
 export type CombatResolvedEvent = BaseGameEvent & {
   type: "COMBAT_RESOLVED";
   attackerUnitId: UnitId;
@@ -102,6 +110,7 @@ export type MatchStartedEvent = BaseGameEvent & {
 export type GameEvent =
   | UnitMovedEvent
   | UnitRevealedEvent
+  | FlagAttackedEvent
   | CombatResolvedEvent
   | UnitDefeatedEvent
   | DefenseChangedEvent
@@ -116,6 +125,10 @@ export type GameEvent =
 export type UnitMovedEventPayload = Omit<UnitMovedEvent, keyof BaseGameEvent>;
 export type UnitRevealedEventPayload = Omit<
   UnitRevealedEvent,
+  keyof BaseGameEvent
+>;
+export type FlagAttackedEventPayload = Omit<
+  FlagAttackedEvent,
   keyof BaseGameEvent
 >;
 export type CombatResolvedEventPayload = Omit<
@@ -162,6 +175,7 @@ export type MatchStartedEventPayload = Omit<
 export type GameEventPayload =
   | UnitMovedEventPayload
   | UnitRevealedEventPayload
+  | FlagAttackedEventPayload
   | CombatResolvedEventPayload
   | UnitDefeatedEventPayload
   | DefenseChangedEventPayload

@@ -5,6 +5,7 @@ import type {
   MatchPlayerId,
   MatchPlayerState,
   MatchState,
+  AttackFlagAction,
   ConcedeMatchAction,
   DeployReserveAction,
   MoveUnitAction,
@@ -23,7 +24,13 @@ import {
 } from "../../core";
 import { resolveCombat } from "./combat";
 import { deployReserveUnit } from "./reserve";
-import { isCoordinateInFlagArea } from "./flag";
+import {
+  applyFlagDamage,
+  getFlagAreaCoordinates,
+  isCoordinateInFlagArea,
+  isFlagAtMaximumDamage,
+  validateFlagState,
+} from "./flag";
 import {
   getInitialPlacementCoordinates,
   isCoordinateInInitialPlacementArea,
@@ -37,6 +44,12 @@ import {
 } from "./visibility";
 import type { TacticalDuelActionResult } from "./reducer-types";
 import { advanceTurn, getOpponentPlayerId } from "./turn";
+
+export type ApplyAttackFlagActionInput = {
+  state: MatchState;
+  action: AttackFlagAction;
+  config: TacticalRuleConfig;
+};
 
 type ApplyMoveUnitActionInput = {
   state: MatchState;
@@ -86,6 +99,11 @@ type ValidatedDeployReserveInput = ValidatedCommonActionInput & {
   unit: UnitState;
 };
 
+type ValidatedAttackFlagInput = ValidatedCommonActionInput & {
+  unit: UnitState;
+  defender: MatchPlayerState;
+};
+
 type ValidatedSubmitInitialPlacementInput = {
   actor: MatchPlayerState;
   placementUnits: readonly UnitState[];
@@ -94,7 +112,7 @@ type ValidatedSubmitInitialPlacementInput = {
 type CommonActionValidationInput = {
   state: MatchState;
   action: Pick<
-    MoveUnitAction | DeployReserveAction | ConcedeMatchAction,
+    MoveUnitAction | AttackFlagAction | DeployReserveAction | ConcedeMatchAction,
     "matchId" | "actorId" | "expectedStateVersion" | "type"
   >;
   requireCurrentTurnActor: boolean;
@@ -122,7 +140,7 @@ const findUnitsById = (
 const validatePlayers = (
   state: MatchState,
   action: Pick<
-    MoveUnitAction | DeployReserveAction | ConcedeMatchAction,
+    MoveUnitAction | AttackFlagAction | DeployReserveAction | ConcedeMatchAction,
     "actorId"
   >,
   actorNotFoundCode: Extract<
@@ -417,6 +435,242 @@ const validateMoveAction = (
       ...commonResult.value,
       unit,
       origin: cloneCoordinate(unit.position),
+    },
+  };
+};
+
+const validateNoUnitsInFlagAreas = (
+  state: MatchState,
+): Result<true, RuleError> => {
+  for (const player of state.players) {
+    const coordinatesResult = getFlagAreaCoordinates({
+      side: player.side,
+      boardSize: state.boardSize,
+    });
+
+    if (!coordinatesResult.ok) {
+      return coordinatesResult;
+    }
+
+    for (const coordinate of coordinatesResult.value) {
+      const occupant = getUnitAtCoordinate(state.units, coordinate);
+      if (occupant !== null) {
+        return {
+          ok: false,
+          error: makeRuleError(
+            "FLAG_AREA_OCCUPIED",
+            "Flag areas must not contain board units.",
+            { coordinate, occupantUnitId: occupant.id },
+          ),
+        };
+      }
+    }
+  }
+
+  return { ok: true, value: true };
+};
+
+const validateAttackFlagAction = (
+  input: ApplyAttackFlagActionInput,
+): Result<ValidatedAttackFlagInput, RuleError> => {
+  const { state, action } = input;
+  const commonResult = validateCommonAction({
+    ...input,
+    requireCurrentTurnActor: true,
+  });
+
+  if (!commonResult.ok) {
+    return commonResult;
+  }
+
+  const uniqueUnitsResult = validateUniqueUnitIds(state.units);
+  if (!uniqueUnitsResult.ok) {
+    return uniqueUnitsResult;
+  }
+
+  const targetUnits = findUnitsById(state.units, action.unitId);
+  if (targetUnits.length === 0) {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_NOT_FOUND", "Unit was not found.", {
+        unitId: action.unitId,
+      }),
+    };
+  }
+
+  if (targetUnits.length > 1) {
+    return {
+      ok: false,
+      error: makeRuleError("DUPLICATE_UNIT", "Unit ids must be unique.", {
+        unitId: action.unitId,
+      }),
+    };
+  }
+
+  const unit = targetUnits[0];
+  if (unit.ownerId !== action.actorId) {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_NOT_OWNED", "Actor does not own the unit.", {
+        unitId: unit.id,
+        ownerId: unit.ownerId,
+        actorId: action.actorId,
+      }),
+    };
+  }
+
+  if (unit.status === "defeated") {
+    return {
+      ok: false,
+      error: makeRuleError("UNIT_DEFEATED", "Defeated units cannot attack flags.", {
+        unitId: unit.id,
+      }),
+    };
+  }
+
+  if (unit.status !== "board") {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "UNIT_NOT_ON_BOARD",
+        "Only board units can attack flags.",
+        { unitId: unit.id, status: unit.status },
+      ),
+    };
+  }
+
+  if (unit.position === null) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "UNIT_NOT_ON_BOARD",
+        "Board units must have a position before attacking flags.",
+        { unitId: unit.id },
+      ),
+    };
+  }
+
+  if (!isValidStance(action.nextStance)) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "INVALID_ACTION",
+        "nextStance must be attack or defense.",
+        { nextStance: action.nextStance },
+      ),
+    };
+  }
+
+  if (!isInsideBoard(action.target, state.boardSize)) {
+    return {
+      ok: false,
+      error: makeRuleError("OUT_OF_BOUNDS", "Flag attack target is outside board.", {
+        target: action.target,
+        boardSize: state.boardSize,
+      }),
+    };
+  }
+
+  const defender = state.players.find(
+    (player) => player.id === commonResult.value.opponentId,
+  );
+
+  if (defender === undefined) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "MATCH_PLAYER_NOT_FOUND",
+        "Opponent player must exist in the match state.",
+        { opponentId: commonResult.value.opponentId },
+      ),
+    };
+  }
+
+  const ownFlagAreaResult = isCoordinateInFlagArea({
+    coordinate: action.target,
+    side: commonResult.value.actor.side,
+    boardSize: state.boardSize,
+  });
+
+  if (!ownFlagAreaResult.ok) {
+    return ownFlagAreaResult;
+  }
+
+  if (ownFlagAreaResult.value) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "TARGET_NOT_OPPONENT_FLAG",
+        "Actors cannot attack their own flag area.",
+        { target: action.target, actorId: action.actorId },
+      ),
+    };
+  }
+
+  const opponentFlagAreaResult = isCoordinateInFlagArea({
+    coordinate: action.target,
+    side: defender.side,
+    boardSize: state.boardSize,
+  });
+
+  if (!opponentFlagAreaResult.ok) {
+    return opponentFlagAreaResult;
+  }
+
+  if (!opponentFlagAreaResult.value) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "TARGET_NOT_OPPONENT_FLAG",
+        "Flag attack target must be in the opponent flag area.",
+        { target: action.target, defenderPlayerId: defender.id },
+      ),
+    };
+  }
+
+  if (defender.flag.ownerId !== defender.id) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "FLAG_OWNER_MISMATCH",
+        "Opponent flag owner must match the opponent player id.",
+        { defenderPlayerId: defender.id, flagOwnerId: defender.flag.ownerId },
+      ),
+    };
+  }
+
+  const flagResult = validateFlagState(defender.flag);
+  if (!flagResult.ok) {
+    return flagResult;
+  }
+
+  const flagDestroyedResult = isFlagAtMaximumDamage(defender.flag);
+  if (!flagDestroyedResult.ok) {
+    return flagDestroyedResult;
+  }
+
+  if (flagDestroyedResult.value) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "FLAG_ALREADY_DESTROYED",
+        "Active matches cannot attack a flag that is already at maximum damage.",
+        { defenderPlayerId: defender.id, damage: defender.flag.damage },
+      ),
+    };
+  }
+
+  const flagOccupancyResult = validateNoUnitsInFlagAreas(state);
+  if (!flagOccupancyResult.ok) {
+    return flagOccupancyResult;
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...commonResult.value,
+      unit,
+      defender,
     },
   };
 };
@@ -1092,6 +1346,14 @@ const replaceUnits = (
   return units.map((unit) => replacementsById.get(unit.id) ?? unit);
 };
 
+const replacePlayer = (
+  players: readonly MatchPlayerState[],
+  replacement: MatchPlayerState,
+): MatchPlayerState[] =>
+  players.map((player) =>
+    player.id === replacement.id ? replacement : player,
+  );
+
 const getEnemyAtDestination = (
   units: readonly UnitState[],
   actorId: MatchPlayerId,
@@ -1142,6 +1404,17 @@ const createUnitMovedEvent = (
   from,
   to,
   stance,
+});
+
+const createFlagAttackedEvent = (
+  action: AttackFlagAction,
+  defenderPlayerId: MatchPlayerId,
+): GameEventPayload => ({
+  type: "FLAG_ATTACKED",
+  attackerUnitId: action.unitId,
+  attackerPlayerId: action.actorId,
+  defenderPlayerId,
+  target: cloneCoordinate(action.target),
 });
 
 const finalizeSuccessfulAction = (
@@ -1371,6 +1644,96 @@ export const applyMoveUnitAction = (
   return applyCombatMove({ ...input, validated: validationResult.value });
 };
 
+export const applyAttackFlagAction = (
+  input: ApplyAttackFlagActionInput,
+): Result<TacticalDuelActionResult, RuleError> => {
+  const validationResult = validateAttackFlagAction(input);
+
+  if (!validationResult.ok) {
+    return validationResult;
+  }
+
+  const legalMovesResult = calculateLegalMoves({
+    unit: validationResult.value.unit,
+    units: input.state.units,
+    boardSize: input.state.boardSize,
+    movementRule: validationResult.value.unit.card.movementRule,
+    config: input.config,
+  });
+
+  if (!legalMovesResult.ok) {
+    return legalMovesResult;
+  }
+
+  const legalMove = findLegalMove(legalMovesResult.value, input.action.target);
+
+  if (legalMove === null || legalMove.kind !== "move") {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "FLAG_ATTACK_NOT_LEGAL",
+        "Flag attack target is not reachable by the unit movement rule.",
+        { unitId: input.action.unitId, target: input.action.target },
+      ),
+    };
+  }
+
+  const revealResult = applyRevealOnMoveConfirmed({
+    unit: validationResult.value.unit,
+    opponentId: validationResult.value.opponentId,
+    visibilities: input.state.unitVisibilities,
+    config: input.config,
+  });
+
+  if (!revealResult.ok) {
+    return revealResult;
+  }
+
+  const flagDamageResult = applyFlagDamage({
+    flag: validationResult.value.defender.flag,
+    amount: 1,
+  });
+
+  if (!flagDamageResult.ok) {
+    return flagDamageResult;
+  }
+
+  if (flagDamageResult.value.appliedDamage !== 1) {
+    return {
+      ok: false,
+      error: makeRuleError(
+        "FLAG_ALREADY_DESTROYED",
+        "A successful flag attack must apply exactly one damage.",
+        {
+          defenderPlayerId: validationResult.value.defender.id,
+          appliedDamage: flagDamageResult.value.appliedDamage,
+        },
+      ),
+    };
+  }
+
+  const nextUnit: UnitState = {
+    ...validationResult.value.unit,
+    stance: input.action.nextStance,
+  };
+  const nextDefender: MatchPlayerState = {
+    ...validationResult.value.defender,
+    flag: flagDamageResult.value.flag,
+  };
+  const nextState: MatchState = {
+    ...input.state,
+    players: replacePlayer(input.state.players, nextDefender),
+    units: replaceUnits(input.state.units, [nextUnit]),
+    unitVisibilities: [...revealResult.value.visibilities],
+  };
+
+  return finalizeSuccessfulAction(nextState, [
+    ...revealResult.value.events,
+    createFlagAttackedEvent(input.action, validationResult.value.defender.id),
+    ...flagDamageResult.value.events,
+  ]);
+};
+
 export const applyDeployReserveAction = (
   input: ApplyDeployReserveActionInput,
 ): Result<TacticalDuelActionResult, RuleError> => {
@@ -1520,6 +1883,12 @@ export const applyTacticalDuelAction = (
   switch (input.action.type) {
     case "MOVE_UNIT":
       return applyMoveUnitAction({
+        state: input.state,
+        action: input.action,
+        config: input.config,
+      });
+    case "ATTACK_FLAG":
+      return applyAttackFlagAction({
         state: input.state,
         action: input.action,
         config: input.config,
