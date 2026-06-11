@@ -51,7 +51,9 @@ export type FlagDamagedEvent = BaseGameEvent & {
   type: "FLAG_DAMAGED";
   ownerId: MatchPlayerId;
   previousDamage: number;
-  nextDamage: number;
+  damage: number;
+  appliedDamage: number;
+  maxDamage: number;
 };
 
 export type TurnChangedEvent = BaseGameEvent & {
