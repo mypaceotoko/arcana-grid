@@ -29,7 +29,9 @@
 - 秘密情報が相手ビューや主要イベントへ漏れないことを確認するテスト。
 - `/debug/local-match` の安全なPlayerMatchViewベース盤面表示。
 - `/debug/local-match` のデバッグ専用インメモリローカル対戦ハーネス。
-- 現在viewerの自分の盤面ユニット選択、サーバー側合法移動候補取得、通常移動/戦闘候補の区別表示、attack/defense選択、MOVE_UNIT実行、イベントログ、fixtureリセット。
+- setup fixtureからの初期配置UI、6体配置、2体リザーバー指定、attack/defense選択、SUBMIT_INITIAL_PLACEMENT送信。
+- 両者提出後のデバッグハーネス内first player決定、`startTacticalDuelMatch`実行、MATCH_STARTEDイベント表示、activeフェーズ接続。
+- 現在viewerの自分の盤面ユニット選択、サーバー側合法移動候補取得、通常移動/戦闘候補の区別表示、attack/defense選択、MOVE_UNIT実行、DEPLOY_RESERVE、ATTACK_FLAG、CONCEDE_MATCH、イベントログ、setup/active fixtureリセット。
 
 ## テスト状況
 
@@ -44,12 +46,11 @@
 
 ## 現在の次タスク
 
-- 次タスク: Task 7C以降のローカル対戦UI拡張。
-- 今回未実装: DEPLOY_RESERVE操作、ATTACK_FLAG操作、CONCEDE_MATCH操作、初期配置操作、対戦開始操作、戦闘アニメーション、カード画像の本格導入、Supabase/Auth/Database/Realtime/オンライン対戦。
+- 次タスク: Task 7E以降のローカル対戦UI拡張またはオンライン対戦基盤。
+- 今回未実装: 戦闘アニメーション、カード画像の本格導入、Supabase/Auth/Database/Realtime/オンライン対戦。
 
 ## 未実装項目
 
-- ローカル対戦UIの初期配置、リザーブ配備、旗攻撃、投了操作。
 - Supabase基盤、migration、RLS、サーバー側ルール実行。
 - オンライン2人対戦、リアルタイム同期、再接続。
 - カードマスタと画像管理。

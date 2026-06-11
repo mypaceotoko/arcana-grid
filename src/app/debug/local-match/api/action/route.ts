@@ -6,6 +6,7 @@ import {
   submitLocalDebugConcedeMatch,
   submitLocalDebugDeployReserve,
   submitLocalDebugMoveUnit,
+  submitLocalDebugInitialPlacement,
 } from "../../harness";
 import {
   isDebugApiEnabled,
@@ -36,6 +37,41 @@ export async function POST(request: NextRequest) {
   if (actionType === "CONCEDE_MATCH") {
     const result = submitLocalDebugConcedeMatch({
       viewerSide: parseViewerSide(body.viewerSide),
+      expectedStateVersion,
+      actionId: parseActionId(body.actionId),
+    });
+
+    if (!result.ok) return jsonError(result.error);
+    return jsonResult(result.value);
+  }
+
+  if (actionType === "SUBMIT_INITIAL_PLACEMENT") {
+    const placementsInput = Array.isArray(body.placements) ? body.placements : null;
+    const reserveInput = Array.isArray(body.reserveUnitIds) ? body.reserveUnitIds : null;
+
+    if (placementsInput === null || reserveInput === null) {
+      return jsonError(makeInvalidRequestError("placements and reserveUnitIds are required."));
+    }
+
+    const placements = placementsInput.map((placement) => {
+      if (typeof placement !== "object" || placement === null) return null;
+      const candidate = placement as Record<string, unknown>;
+      const unitId = parseUnitId(candidate.unitId);
+      const position = parseCoordinate(candidate.position);
+      const stance = parseStance(candidate.stance);
+      if (unitId === null || position === null || stance === null) return null;
+      return { unitId, position, stance };
+    });
+    const reserveUnitIds = reserveInput.map(parseUnitId);
+
+    if (placements.some((placement) => placement === null) || reserveUnitIds.some((unitId) => unitId === null)) {
+      return jsonError(makeInvalidRequestError("placements and reserveUnitIds must contain valid unit ids, coordinates, and stances."));
+    }
+
+    const result = submitLocalDebugInitialPlacement({
+      viewerSide: parseViewerSide(body.viewerSide),
+      placements: placements as NonNullable<(typeof placements)[number]>[],
+      reserveUnitIds: reserveUnitIds as NonNullable<(typeof reserveUnitIds)[number]>[],
       expectedStateVersion,
       actionId: parseActionId(body.actionId),
     });
