@@ -52,6 +52,7 @@ export type SubmitInitialPlacementAction = {
   matchId: MatchId;
   actorId: MatchPlayerId;
   placements: readonly InitialPlacement[];
+  reserveUnitIds: readonly UnitId[];
   expectedStateVersion: number;
 };
 

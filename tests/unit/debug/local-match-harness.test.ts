@@ -10,6 +10,7 @@ import {
 import {
   LOCAL_DEBUG_MATCH_PLAYER_IDS,
   localDebugMatchState,
+  localDebugSetupMatchState,
 } from "../../../src/app/debug/local-match/fixture";
 import {
   getLocalDebugFlagAttackCandidates,
@@ -21,8 +22,10 @@ import {
   submitLocalDebugConcedeMatch,
   submitLocalDebugDeployReserve,
   submitLocalDebugMoveUnit,
+  submitLocalDebugInitialPlacement,
   unsafeGetLocalDebugMatchStateForTests,
   unsafeSetLocalDebugMatchStateForTests,
+  unsafeSetFirstPlayerRandomSourceForTests,
 } from "../../../src/app/debug/local-match/harness";
 import type { Result, RuleError } from "../../../src/game";
 
@@ -52,7 +55,8 @@ const northReserve = toUnitId("local-debug-north-reserve");
 const moveActionId = (name: string) => toActionId(`local-debug-test-${name}`);
 
 beforeEach(() => {
-  unwrap(resetLocalDebugMatch("south"));
+  unwrap(resetLocalDebugMatch("south", "active"));
+  unsafeSetFirstPlayerRandomSourceForTests(() => 0);
 });
 
 describe("local debug match harness move candidates", () => {
@@ -219,7 +223,7 @@ describe("local debug match harness MOVE_UNIT", () => {
       }),
     );
 
-    const reset = unwrap(resetLocalDebugMatch("south"));
+    const reset = unwrap(resetLocalDebugMatch("south", "active"));
 
     expect(reset.view.stateVersion).toBe(localDebugMatchState.stateVersion);
     expect(reset.events).toEqual([]);
@@ -436,5 +440,155 @@ describe("local debug match safe state responses", () => {
     expect(serialized).not.toContain("North Hidden Shade");
     expect(serialized).not.toContain("debug-card-north-shade-secret");
     expect(serialized).not.toContain("North Reserve Secret");
+  });
+});
+
+describe("local debug match harness initial placement and start", () => {
+  const setupUnitId = (side: "north" | "south", index: number) =>
+    toUnitId(`local-debug-${side}-setup-${index}`);
+  const placements = (side: "north" | "south") => {
+    const row = side === "north" ? 0 : 6;
+    return [0, 1, 2, 5, 6, 7].map((col, index) => ({
+      unitId: setupUnitId(side, index + 1),
+      position: { row, col },
+      stance: index % 2 === 0 ? "attack" as const : "defense" as const,
+    }));
+  };
+  const reserves = (side: "north" | "south") => [setupUnitId(side, 7), setupUnitId(side, 8)];
+
+  it("resets to the setup fixture with only the viewer's own eight units detailed", () => {
+    const response = unwrap(resetLocalDebugMatch("south"));
+    const state = unsafeGetLocalDebugMatchStateForTests();
+
+    expect(state).toEqual(localDebugSetupMatchState);
+    expect(response.view.phase).toBe("setup");
+    expect(response.view.currentTurnPlayerId).toBeNull();
+    expect(response.view.turnNumber).toBe(0);
+    expect(response.view.players.find((player) => player.id !== response.view.viewerId)?.reserveUnitIds).toEqual([]);
+    expect(response.view.units.filter((unit) => unit.ownerId === response.view.viewerId)).toHaveLength(8);
+    expect(response.view.units.filter((unit) => unit.ownerId !== response.view.viewerId)).toHaveLength(0);
+    expect(response.setup.legalPlacementCoordinates).not.toContainEqual({ row: 7, col: 3 });
+  });
+
+  it("rejects invalid setup submissions without mutating state", () => {
+    unwrap(resetLocalDebugMatch("south"));
+    const before = unsafeGetLocalDebugMatchStateForTests();
+
+    expectErrorCode(
+      submitLocalDebugInitialPlacement({
+        viewerSide: "south",
+        placements: placements("south").slice(0, 5),
+        reserveUnitIds: reserves("south"),
+        expectedStateVersion: before.stateVersion,
+        actionId: moveActionId("setup-count"),
+      }),
+      "INVALID_INITIAL_PLACEMENT_COUNT",
+    );
+    expect(unsafeGetLocalDebugMatchStateForTests()).toEqual(before);
+
+    expectErrorCode(
+      submitLocalDebugInitialPlacement({
+        viewerSide: "south",
+        placements: placements("south").map((placement, index) =>
+          index === 0 ? { ...placement, unitId: setupUnitId("north", 1) } : placement,
+        ),
+        reserveUnitIds: reserves("south"),
+        expectedStateVersion: before.stateVersion,
+        actionId: moveActionId("setup-opponent"),
+      }),
+      "INITIAL_PLACEMENT_OWNER_MISMATCH",
+    );
+    expect(unsafeGetLocalDebugMatchStateForTests()).toEqual(before);
+
+    expectErrorCode(
+      submitLocalDebugInitialPlacement({
+        viewerSide: "south",
+        placements: [{ ...placements("south")[0], position: { row: 7, col: 3 } }, ...placements("south").slice(1)],
+        reserveUnitIds: reserves("south"),
+        expectedStateVersion: before.stateVersion,
+        actionId: moveActionId("setup-flag"),
+      }),
+      "INITIAL_PLACEMENT_DESTINATION_IS_FLAG",
+    );
+    expect(unsafeGetLocalDebugMatchStateForTests()).toEqual(before);
+
+    expectErrorCode(
+      submitLocalDebugInitialPlacement({
+        viewerSide: "south",
+        placements: placements("south"),
+        reserveUnitIds: reserves("south"),
+        expectedStateVersion: before.stateVersion - 1,
+        actionId: moveActionId("setup-stale"),
+      }),
+      "STALE_STATE_VERSION",
+    );
+    expect(unsafeGetLocalDebugMatchStateForTests()).toEqual(before);
+  });
+
+  it("keeps phase setup after one submission, hides details from opponent, and rejects resubmit", () => {
+    unwrap(resetLocalDebugMatch("south"));
+    const response = unwrap(submitLocalDebugInitialPlacement({
+      viewerSide: "south",
+      placements: placements("south"),
+      reserveUnitIds: reserves("south"),
+      expectedStateVersion: localDebugSetupMatchState.stateVersion,
+      actionId: moveActionId("setup-south"),
+    }));
+
+    expect(response.view.phase).toBe("setup");
+    expect(response.view.players.find((player) => player.id === response.view.viewerId)?.setupSubmitted).toBe(true);
+    expect(response.events.map((event) => event.type)).toContain("INITIAL_PLACEMENT_SUBMITTED");
+    expectErrorCode(
+      submitLocalDebugInitialPlacement({
+        viewerSide: "south",
+        placements: placements("south"),
+        reserveUnitIds: reserves("south"),
+        expectedStateVersion: response.view.stateVersion,
+        actionId: moveActionId("setup-resubmit"),
+      }),
+      "INITIAL_PLACEMENT_ALREADY_SUBMITTED",
+    );
+
+    const northView = unwrap(getLocalDebugMatchView("north"));
+    const serialized = JSON.stringify(northView);
+    expect(serialized).not.toContain("South Setup");
+    expect(serialized).not.toContain("debug-card-south-setup");
+    expect(northView.view.players.find((player) => player.id === LOCAL_DEBUG_MATCH_PLAYER_IDS.south)?.reserveUnitIds).toEqual([]);
+    expect(northView.view.players.find((player) => player.id === LOCAL_DEBUG_MATCH_PLAYER_IDS.south)?.setupSubmitted).toBe(true);
+  });
+
+  it("starts via startTacticalDuelMatch after both submissions and allows active MOVE_UNIT", () => {
+    unwrap(resetLocalDebugMatch("south"));
+    unsafeSetFirstPlayerRandomSourceForTests(() => 1);
+    const southResponse = unwrap(submitLocalDebugInitialPlacement({
+      viewerSide: "south",
+      placements: placements("south"),
+      reserveUnitIds: reserves("south"),
+      expectedStateVersion: localDebugSetupMatchState.stateVersion,
+      actionId: moveActionId("setup-south-start"),
+    }));
+    const started = unwrap(submitLocalDebugInitialPlacement({
+      viewerSide: "north",
+      placements: placements("north"),
+      reserveUnitIds: reserves("north"),
+      expectedStateVersion: southResponse.view.stateVersion,
+      actionId: moveActionId("setup-north-start"),
+    }));
+
+    expect(started.view.phase).toBe("active");
+    expect(started.view.turnNumber).toBe(1);
+    expect(started.view.currentTurnPlayerId).toBe(LOCAL_DEBUG_MATCH_PLAYER_IDS.south);
+    expect(started.events.map((event) => event.type)).toContain("MATCH_STARTED");
+
+    const moveResult = unwrap(submitLocalDebugMoveUnit({
+      viewerSide: "south",
+      unitId: setupUnitId("south", 1),
+      destination: { row: 5, col: 0 },
+      nextStance: "attack",
+      expectedStateVersion: started.view.stateVersion,
+      actionId: moveActionId("post-start-move"),
+    }));
+    expect(moveResult.view.phase).toBe("active");
+    expect(moveResult.events.map((event) => event.type)).toContain("UNIT_MOVED");
   });
 });

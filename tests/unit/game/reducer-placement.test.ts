@@ -149,6 +149,7 @@ const action = (
   matchId,
   actorId: north,
   placements: northPlacements(),
+  reserveUnitIds: reserveIds("north").map(toUnitId),
   expectedStateVersion: 3,
   ...overrides,
 });
@@ -254,11 +255,11 @@ describe("applySubmitInitialPlacementAction reserve and unit validation", () => 
   });
 
   it("rejects invalid reserveUnitIds", () => {
-    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState({ players: [player(north, "north", ["north-reserve-0", "north-reserve-0"]), player(south, "south", reserveIds("south"))] }), action: action(), config }), "INVALID_RESERVE_UNIT_IDS");
-    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState({ players: [player(north, "north", ["north-reserve-0"]), player(south, "south", reserveIds("south"))] }), action: action(), config }), "INVALID_RESERVE_UNIT_IDS");
-    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState({ players: [player(north, "north", ["north-reserve-0", "north-reserve-1", "north-initial-0"]), player(south, "south", reserveIds("south"))] }), action: action(), config }), "INVALID_RESERVE_UNIT_IDS");
-    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState({ players: [player(north, "north", ["north-reserve-0", "missing"]), player(south, "south", reserveIds("south"))] }), action: action(), config }), "INVALID_RESERVE_UNIT_IDS");
-    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState({ players: [player(north, "north", ["north-reserve-0", "south-reserve-0"]), player(south, "south", reserveIds("south"))] }), action: action(), config }), "INVALID_RESERVE_UNIT_IDS");
+    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: action({ reserveUnitIds: [toUnitId("north-reserve-0"), toUnitId("north-reserve-0")] }), config }), "INVALID_RESERVE_UNIT_IDS");
+    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: action({ reserveUnitIds: [toUnitId("north-reserve-0")] }), config }), "INVALID_RESERVE_UNIT_IDS");
+    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: action({ reserveUnitIds: [toUnitId("north-reserve-0"), toUnitId("north-reserve-1"), toUnitId("north-initial-0")] }), config }), "INVALID_RESERVE_UNIT_IDS");
+    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: action({ reserveUnitIds: [toUnitId("north-reserve-0"), toUnitId("missing")] }), config }), "INVALID_RESERVE_UNIT_IDS");
+    expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: action({ reserveUnitIds: [toUnitId("north-reserve-0"), toUnitId("south-reserve-0")] }), config }), "INVALID_RESERVE_UNIT_IDS");
   });
 
   it("rejects invalid placement units", () => {
@@ -281,7 +282,7 @@ describe("applySubmitInitialPlacementAction placement validation", () => {
 
     const customConfig: TacticalRuleConfig = { ...config, initialUnitCount: 5, reserveUnitCount: 3 };
     const customState = baseState({ players: [player(north, "north", ["north-reserve-0", "north-reserve-1", "north-initial-5"]), player(south, "south", reserveIds("south"))] });
-    expect(applySubmitInitialPlacementAction({ state: customState, action: action({ placements: northPlacements(initialIds("north").slice(0, 5)) }), config: customConfig }).ok).toBe(true);
+    expect(applySubmitInitialPlacementAction({ state: customState, action: action({ placements: northPlacements(initialIds("north").slice(0, 5)), reserveUnitIds: [toUnitId("north-reserve-0"), toUnitId("north-reserve-1"), toUnitId("north-initial-5")] }), config: customConfig }).ok).toBe(true);
   });
 
   it("validates north/south setup areas, flag areas, board bounds, and occupancy", () => {
@@ -290,7 +291,7 @@ describe("applySubmitInitialPlacementAction placement validation", () => {
     expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: action({ placements: [{ ...northPlacements()[0], position: { row: 0, col: 3 } }, ...northPlacements().slice(1)] }), config }), "INITIAL_PLACEMENT_DESTINATION_IS_FLAG");
     expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: action({ placements: [{ ...northPlacements()[0], position: { row: -1, col: 0 } }, ...northPlacements().slice(1)] }), config }), "INVALID_INITIAL_PLACEMENT_DESTINATION");
 
-    const southAction = action({ actorId: south, placements: southPlacements() });
+    const southAction = action({ actorId: south, placements: southPlacements(), reserveUnitIds: reserveIds("south").map(toUnitId) });
     expect(applySubmitInitialPlacementAction({ state: baseState(), action: southAction, config }).ok).toBe(true);
     expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: { ...southAction, placements: [{ ...southPlacements()[0], position: { row: 5, col: 0 } }, ...southPlacements().slice(1)] }, config }), "INVALID_INITIAL_PLACEMENT_DESTINATION");
     expectErrorCode(applySubmitInitialPlacementAction({ state: baseState(), action: { ...southAction, placements: [{ ...southPlacements()[0], position: { row: 7, col: 3 } }, ...southPlacements().slice(1)] }, config }), "INITIAL_PLACEMENT_DESTINATION_IS_FLAG");
@@ -342,7 +343,7 @@ describe("applySubmitInitialPlacementAction state update, visibility, events, an
 
   it("does not start the match when both players have submitted", () => {
     const first = unwrap(applySubmitInitialPlacementAction({ state: baseState(), action: action(), config }));
-    const secondAction = action({ actorId: south, placements: southPlacements(), expectedStateVersion: first.state.stateVersion });
+    const secondAction = action({ actorId: south, placements: southPlacements(), reserveUnitIds: reserveIds("south").map(toUnitId), expectedStateVersion: first.state.stateVersion });
     const second = unwrap(applySubmitInitialPlacementAction({ state: first.state, action: secondAction, config }));
 
     expect(second.state.players.every((nextPlayer) => nextPlayer.setupSubmitted)).toBe(true);

@@ -946,10 +946,11 @@ const validateSetupAction = ({
 
 const validateReserveUnitIds = (
   actor: MatchPlayerState,
+  reserveUnitIdsInput: readonly UnitId[],
   units: readonly UnitState[],
   config: TacticalRuleConfig,
 ): Result<ReadonlySet<UnitId>, RuleError> => {
-  if (actor.reserveUnitIds.length !== config.reserveUnitCount) {
+  if (reserveUnitIdsInput.length !== config.reserveUnitCount) {
     return {
       ok: false,
       error: makeRuleError(
@@ -957,7 +958,7 @@ const validateReserveUnitIds = (
         "reserveUnitIds must contain exactly the configured reserve unit count.",
         {
           playerId: actor.id,
-          reserveUnitCount: actor.reserveUnitIds.length,
+          reserveUnitCount: reserveUnitIdsInput.length,
           expectedReserveUnitCount: config.reserveUnitCount,
         },
       ),
@@ -965,7 +966,7 @@ const validateReserveUnitIds = (
   }
 
   const reserveSet = new Set<UnitId>();
-  for (const unitId of actor.reserveUnitIds) {
+  for (const unitId of reserveUnitIdsInput) {
     if (reserveSet.has(unitId)) {
       return {
         ok: false,
@@ -1121,6 +1122,7 @@ const validateSubmitInitialPlacementAction = (
   const actor = setupResult.value;
   const reserveResult = validateReserveUnitIds(
     actor,
+    input.action.reserveUnitIds,
     input.state.units,
     input.config,
   );
@@ -1854,7 +1856,7 @@ export const applySubmitInitialPlacementAction = (
     ...input.state,
     players: input.state.players.map((player) =>
       player.id === input.action.actorId
-        ? { ...player, setupSubmitted: true }
+        ? { ...player, reserveUnitIds: [...input.action.reserveUnitIds], setupSubmitted: true }
         : player,
     ),
     units: nextUnits,

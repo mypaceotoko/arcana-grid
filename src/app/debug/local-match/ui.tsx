@@ -44,6 +44,7 @@ type ApiFailure = { ok: false; error: { code: string; message: string } };
 type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 
 type ActionMode = "none" | "move" | "deploy" | "flag_attack" | "concede";
+type SetupDraftPlacement = { unitId: string; position: Coordinate; stance: Stance };
 type ActionStep = "idle" | "destination" | "stance" | "confirm";
 type BoardCandidate =
   | LocalDebugMoveCandidate
@@ -327,6 +328,9 @@ export default function LocalMatchDebugClient({
   const [candidates, setCandidates] = useState<readonly BoardCandidate[]>([]);
   const [selectedDestination, setSelectedDestination] = useState<BoardCandidate | null>(null);
   const [nextStance, setNextStance] = useState<Stance>("attack");
+  const [setupSelectedUnitId, setSetupSelectedUnitId] = useState<string | null>(null);
+  const [setupPlacements, setSetupPlacements] = useState<readonly SetupDraftPlacement[]>([]);
+  const [setupReserveUnitIds, setSetupReserveUnitIds] = useState<readonly string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -340,6 +344,30 @@ export default function LocalMatchDebugClient({
     view.units.find((unit) => unit.unitId === selectedUnitId) ?? null;
   const currentPlayer = view.players.find(
     (player) => player.id === view.currentTurnPlayerId,
+  );
+  const viewerPlayer = view.players.find((player) => player.id === view.viewerId);
+  const opponentPlayer = view.players.find((player) => player.id !== view.viewerId);
+  const isSetupPhase = view.phase === "setup";
+  const setupSubmitted = viewerPlayer?.setupSubmitted ?? false;
+  const opponentSetupSubmitted = opponentPlayer?.setupSubmitted ?? false;
+  const ownSetupUnits = isSetupPhase
+    ? view.units.filter((unit) => unit.ownerId === view.viewerId)
+    : [];
+  const setupPlacementByUnitId = useMemo(
+    () => new Map(setupPlacements.map((placement) => [placement.unitId, placement])),
+    [setupPlacements],
+  );
+  const setupReserveIdSet = useMemo(
+    () => new Set(setupReserveUnitIds),
+    [setupReserveUnitIds],
+  );
+  const setupLegalCoordinateKeys = useMemo(
+    () => new Set(data.setup.legalPlacementCoordinates.map(coordinateKey)),
+    [data.setup.legalPlacementCoordinates],
+  );
+  const setupOccupiedCoordinateKeys = useMemo(
+    () => new Set(setupPlacements.map((placement) => coordinateKey(placement.position))),
+    [setupPlacements],
   );
   const winner = view.players.find((player) => player.id === view.winnerPlayerId);
   const isViewerTurn = view.currentTurnPlayerId === view.viewerId;
@@ -360,9 +388,16 @@ export default function LocalMatchDebugClient({
     setNextStance("attack");
   };
 
+  const resetSetupDraft = () => {
+    setSetupSelectedUnitId(null);
+    setSetupPlacements([]);
+    setSetupReserveUnitIds([]);
+  };
+
   const applyViewResponse = (nextData: LocalDebugViewResponse) => {
     setData(nextData);
     resetSelection();
+    resetSetupDraft();
   };
 
   const postJson = async <T,>(path: string, body: Record<string, unknown>): Promise<ApiResponse<T>> => {
@@ -444,6 +479,64 @@ export default function LocalMatchDebugClient({
     });
   };
 
+  const selectSetupUnit = (unitId: string) => {
+    if (!isSetupPhase || setupSubmitted || isPending) return;
+    setSetupSelectedUnitId(unitId);
+  };
+
+  const toggleSetupReserve = (unitId: string) => {
+    if (!isSetupPhase || setupSubmitted || isPending) return;
+    setSetupReserveUnitIds((previous) => {
+      const exists = previous.includes(unitId);
+      if (exists) return previous.filter((id) => id !== unitId);
+      if (previous.length >= 2) return previous;
+      return [...previous, unitId];
+    });
+    setSetupPlacements((previous) => previous.filter((placement) => placement.unitId !== unitId));
+    setSetupSelectedUnitId(unitId);
+  };
+
+  const updateSetupStance = (unitId: string, stance: Stance) => {
+    setSetupPlacements((previous) =>
+      previous.map((placement) =>
+        placement.unitId === unitId ? { ...placement, stance } : placement,
+      ),
+    );
+  };
+
+  const clearSetupPlacement = (unitId: string) => {
+    setSetupPlacements((previous) => previous.filter((placement) => placement.unitId !== unitId));
+    setSetupSelectedUnitId(unitId);
+  };
+
+  const submitSetupPlacement = () => {
+    setErrorMessage(null);
+    startTransition(async () => {
+      const response = await postJson<LocalDebugViewResponse>(
+        "/debug/local-match/api/action",
+        {
+          actionType: "SUBMIT_INITIAL_PLACEMENT",
+          viewerSide,
+          placements: setupPlacements.map((placement) => ({
+            unitId: placement.unitId,
+            position: placement.position,
+            stance: placement.stance,
+          })),
+          reserveUnitIds: setupReserveUnitIds,
+          expectedStateVersion: view.stateVersion,
+          actionId: makeActionId(),
+        },
+      );
+
+      if (!response.ok) {
+        setErrorMessage(response.error.message);
+        return;
+      }
+
+      applyViewResponse(response.value);
+    });
+  };
+
   const submitSelectedAction = () => {
     if (actionMode === "concede") {
       setErrorMessage(null);
@@ -508,12 +601,12 @@ export default function LocalMatchDebugClient({
     });
   };
 
-  const resetMatch = () => {
+  const resetMatch = (fixture: "setup" | "active") => {
     setErrorMessage(null);
     startTransition(async () => {
       const response = await postJson<LocalDebugViewResponse>(
         "/debug/local-match/api/reset",
-        { viewerSide },
+        { viewerSide, fixture },
       );
 
       if (!response.ok) {
@@ -527,6 +620,21 @@ export default function LocalMatchDebugClient({
 
   const handleCellClick = (unit: UnitView | null, destination: Coordinate) => {
     if (isFinished) return;
+
+    if (isSetupPhase) {
+      if (setupSelectedUnitId === null || setupReserveIdSet.has(setupSelectedUnitId) || setupSubmitted) return;
+      const destinationKey = coordinateKey(destination);
+      const occupiedByOther = setupPlacements.some(
+        (placement) => placement.unitId !== setupSelectedUnitId && coordinateKey(placement.position) === destinationKey,
+      );
+      if (!setupLegalCoordinateKeys.has(destinationKey) || occupiedByOther) return;
+      setSetupPlacements((previous) => [
+        ...previous.filter((placement) => placement.unitId !== setupSelectedUnitId),
+        { unitId: setupSelectedUnitId, position: destination, stance: setupPlacementByUnitId.get(setupSelectedUnitId)?.stance ?? "attack" },
+      ]);
+      setSetupReserveUnitIds((previous) => previous.filter((id) => id !== setupSelectedUnitId));
+      return;
+    }
 
     const candidate = candidatesByCoordinate.get(coordinateKey(destination));
 
@@ -637,6 +745,98 @@ export default function LocalMatchDebugClient({
           </div>
         ) : null}
 
+        {isSetupPhase ? (
+          <section className="rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-4">
+            <h2 className="text-lg font-bold text-cyan-50">初期配置</h2>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-200">
+              <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">自分: {setupSubmitted ? "準備完了" : "未提出"}</span>
+              <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">相手: {opponentSetupSubmitted ? "準備完了" : "未完了"}</span>
+              <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">配置: {setupPlacements.length} / 6</span>
+              <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">リザーブ: {setupReserveUnitIds.length} / 2</span>
+            </div>
+            {setupSubmitted ? (
+              <p className="mt-3 rounded-2xl border border-emerald-300/40 bg-emerald-400/10 p-3 text-sm text-emerald-50">
+                提出済みです。再提出はできません。相手の具体的な配置・リザーバーは表示しません。
+              </p>
+            ) : null}
+            <p className="mt-3 text-xs leading-5 text-cyan-100/80">
+              自分の8体から6体を自陣2列の合法マスへ仮配置し、2体をリザーバー予定にしてください。旗エリアと重複マスはサーバーreducerでも再検証されます。
+            </p>
+            <div className="mt-4 grid gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white">未配置カード一覧</h3>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {ownSetupUnits
+                    .filter((unit) => !setupPlacementByUnitId.has(unit.unitId) && !setupReserveIdSet.has(unit.unitId))
+                    .map((unit) => (
+                      <button
+                        key={unit.unitId}
+                        type="button"
+                        disabled={setupSubmitted || isPending}
+                        onClick={() => selectSetupUnit(unit.unitId)}
+                        className={`rounded-2xl border px-3 py-2 text-left text-xs ${setupSelectedUnitId === unit.unitId ? "border-cyan-200 bg-cyan-300/20" : "border-slate-700 bg-slate-950/80"}`}
+                      >
+                        <span className="block font-bold text-white">{unit.revealed ? unit.card.cardName : compactId(unit.unitId)}</span>
+                        <span className="text-slate-400">{compactId(unit.unitId)}</span>
+                      </button>
+                    ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">仮配置済みカード</h3>
+                <div className="mt-2 grid gap-2">
+                  {setupPlacements.length === 0 ? <p className="text-xs text-slate-400">なし</p> : setupPlacements.map((placement) => {
+                    const unit = ownSetupUnits.find((candidate) => candidate.unitId === placement.unitId);
+                    return (
+                      <div key={placement.unitId} className="rounded-2xl border border-slate-700 bg-slate-950/80 p-3 text-xs">
+                        <button type="button" onClick={() => selectSetupUnit(placement.unitId)} className="font-bold text-cyan-100">
+                          {unit?.revealed ? unit.card.cardName : compactId(placement.unitId)} / {toCoordinateLabel(placement.position)}
+                        </button>
+                        <div className="mt-2 grid grid-cols-3 gap-2">
+                          {(["attack", "defense"] as const).map((stance) => (
+                            <button key={stance} type="button" onClick={() => updateSetupStance(placement.unitId, stance)} className={`rounded-xl border px-2 py-2 font-bold ${placement.stance === stance ? "border-cyan-200 bg-cyan-300/20 text-cyan-50" : "border-slate-700 text-slate-300"}`}>{stance}</button>
+                          ))}
+                          <button type="button" onClick={() => clearSetupPlacement(placement.unitId)} className="rounded-xl border border-rose-300/50 px-2 py-2 font-bold text-rose-100">解除</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">リザーバー予定カード</h3>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {ownSetupUnits.map((unit) => (
+                    <button
+                      key={`reserve-${unit.unitId}`}
+                      type="button"
+                      disabled={setupSubmitted || isPending || (!setupReserveIdSet.has(unit.unitId) && setupReserveUnitIds.length >= 2)}
+                      onClick={() => toggleSetupReserve(unit.unitId)}
+                      className={`rounded-2xl border px-3 py-2 text-left text-xs disabled:opacity-40 ${setupReserveIdSet.has(unit.unitId) ? "border-emerald-200 bg-emerald-300/20 text-emerald-50" : "border-slate-700 bg-slate-950/80 text-slate-300"}`}
+                    >
+                      {unit.revealed ? unit.card.cardName : compactId(unit.unitId)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={setupSubmitted || isPending || setupPlacements.length !== 6 || setupReserveUnitIds.length !== 2}
+                onClick={submitSetupPlacement}
+                className="rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                SUBMIT_INITIAL_PLACEMENTを提出
+              </button>
+              {!setupSubmitted && (setupPlacements.length !== 6 || setupReserveUnitIds.length !== 2) ? (
+                <p className="text-xs text-slate-400">6体配置・2体リザーブを満たすと提出できます。</p>
+              ) : null}
+              {setupSubmitted && !opponentSetupSubmitted ? (
+                <p className="text-xs text-slate-300">相手の準備完了を待っています。</p>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
+
         <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-3">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-base font-bold text-white">Board</h2>
@@ -656,8 +856,11 @@ export default function LocalMatchDebugClient({
           >
             {boardRows.flatMap((row) =>
               row.cells.map((cell) => {
-                const unit = cell.unit;
-                const selected = unit?.unitId === selectedUnitId;
+                const setupDraft = setupPlacements.find((placement) => coordinateKey(placement.position) === coordinateKey(cell.coordinate));
+                const setupDraftUnit = setupDraft === undefined ? null : ownSetupUnits.find((unit) => unit.unitId === setupDraft.unitId) ?? null;
+                const unit = isSetupPhase ? setupDraftUnit : cell.unit;
+                const setupLegal = isSetupPhase && setupSelectedUnitId !== null && !setupReserveIdSet.has(setupSelectedUnitId) && setupLegalCoordinateKeys.has(coordinateKey(cell.coordinate)) && (!setupOccupiedCoordinateKeys.has(coordinateKey(cell.coordinate)) || setupDraft?.unitId === setupSelectedUnitId);
+                const selected = unit?.unitId === selectedUnitId || setupDraft?.unitId === setupSelectedUnitId;
                 const candidate = candidatesByCoordinate.get(coordinateKey(cell.coordinate));
                 const destinationSelected =
                   selectedDestination !== null &&
@@ -673,7 +876,9 @@ export default function LocalMatchDebugClient({
                         ? "border-white bg-white/15"
                         : selected
                           ? "border-white bg-white/10"
-                          : candidateClasses(candidate)
+                          : setupLegal
+                            ? "border-cyan-300 bg-cyan-400/15"
+                            : candidateClasses(candidate)
                     }`}
                     aria-label={`cell ${toCoordinateLabel(cell.coordinate)}${
                       candidate === undefined ? "" : ` ${candidateLabel(candidate)}`
@@ -683,6 +888,9 @@ export default function LocalMatchDebugClient({
                       <span className="absolute right-1 top-0.5 z-10 rounded-full bg-slate-950/80 px-1 text-[0.55rem] font-black text-white">
                         {candidateMarker(candidate)}
                       </span>
+                    ) : null}
+                    {setupLegal ? (
+                      <span className="absolute right-1 top-1 text-[0.6rem] font-bold text-cyan-100">初</span>
                     ) : null}
                     {unit === null ? (
                       <span className="flex h-full items-start justify-start text-slate-600">
@@ -812,13 +1020,22 @@ export default function LocalMatchDebugClient({
         <DetailPanel unit={selectedUnit} />
         <EventLog events={data.events} />
 
-        <button
-          type="button"
-          onClick={resetMatch}
-          className="mb-4 rounded-3xl border border-rose-300/50 bg-rose-500/10 px-4 py-3 text-sm font-bold text-rose-100"
-        >
-          fixture初期状態へリセット
-        </button>
+        <section className="mb-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => resetMatch("setup")}
+            className="rounded-3xl border border-cyan-300/50 bg-cyan-500/10 px-4 py-3 text-sm font-bold text-cyan-100"
+          >
+            setup開始へリセット
+          </button>
+          <button
+            type="button"
+            onClick={() => resetMatch("active")}
+            className="rounded-3xl border border-rose-300/50 bg-rose-500/10 px-4 py-3 text-sm font-bold text-rose-100"
+          >
+            activeデバッグへリセット
+          </button>
+        </section>
       </div>
     </main>
   );

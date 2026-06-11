@@ -10,7 +10,8 @@ export async function POST(request: NextRequest) {
   if (!isDebugApiEnabled()) notFound();
 
   const body = (await request.json()) as Record<string, unknown>;
-  const result = resetLocalDebugMatch(parseViewerSide(body.viewerSide));
+  const fixture = body.fixture === "active" ? "active" : "setup";
+  const result = resetLocalDebugMatch(parseViewerSide(body.viewerSide), fixture);
 
   if (!result.ok) return jsonError(result.error);
   return jsonResult(result.value);

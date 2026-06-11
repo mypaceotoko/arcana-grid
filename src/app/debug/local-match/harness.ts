@@ -4,9 +4,11 @@ import {
   buildPlayerMatchView,
   calculateLegalMoves,
   getFlagAreaCoordinates,
+  getInitialPlacementCoordinates,
   getReserveDeploymentCoordinates,
   isCoordinateInFlagArea,
   coordinateKey,
+  startTacticalDuelMatch,
   toActionId,
   toMatchPlayerId,
   toUnitId,
@@ -23,12 +25,14 @@ import type {
   RuleError,
   Stance,
   UnitId,
+  InitialPlacement,
 } from "@/game";
 
 import {
   LOCAL_DEBUG_CARD_BACK_KEY,
   LOCAL_DEBUG_MATCH_PLAYER_IDS,
   localDebugMatchState,
+  localDebugSetupMatchState,
 } from "./fixture";
 
 export type LocalDebugMoveCandidate = {
@@ -51,10 +55,15 @@ export type LocalDebugEventLogEntry = {
   summary: string;
 };
 
+export type LocalDebugSetupInfo = {
+  legalPlacementCoordinates: readonly Coordinate[];
+};
+
 export type LocalDebugViewResponse = {
   view: PlayerMatchView;
   events: readonly LocalDebugEventLogEntry[];
   stateStorageNote: string;
+  setup: LocalDebugSetupInfo;
 };
 
 export type LocalDebugMoveCandidatesResponse = {
@@ -105,9 +114,20 @@ export type LocalDebugConcedeMatchActionInput = {
   actionId: ActionId;
 };
 
+export type LocalDebugSubmitInitialPlacementActionInput = {
+  viewerSide: PlayerSide;
+  placements: readonly InitialPlacement[];
+  reserveUnitIds: readonly UnitId[];
+  expectedStateVersion: number;
+  actionId: ActionId;
+};
+
+type FirstPlayerRandomSource = () => number;
+
 type LocalDebugHarnessStore = {
   state: MatchState;
   events: GameEventPayload[];
+  firstPlayerRandomSource: FirstPlayerRandomSource;
 };
 
 const STORE_KEY = "__arcanaGridLocalDebugMatchHarness__";
@@ -123,7 +143,18 @@ const makeRuleError = (
 
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-const cloneInitialState = (): MatchState => cloneJson(localDebugMatchState);
+const cloneSetupState = (): MatchState => cloneJson(localDebugSetupMatchState);
+const cloneActiveState = (): MatchState => cloneJson(localDebugMatchState);
+const defaultFirstPlayerRandomSource: FirstPlayerRandomSource = () => {
+  const cryptoObject = globalThis.crypto;
+  if (cryptoObject !== undefined) {
+    const values = new Uint32Array(1);
+    cryptoObject.getRandomValues(values);
+    return values[0] / 2 ** 32;
+  }
+
+  return Math.random();
+};
 
 const getGlobalStore = (): LocalDebugHarnessStore => {
   const globalObject = globalThis as typeof globalThis & {
@@ -131,8 +162,9 @@ const getGlobalStore = (): LocalDebugHarnessStore => {
   };
 
   globalObject[STORE_KEY] ??= {
-    state: cloneInitialState(),
+    state: cloneSetupState(),
     events: [],
+    firstPlayerRandomSource: defaultFirstPlayerRandomSource,
   };
 
   return globalObject[STORE_KEY];
@@ -146,15 +178,43 @@ const cloneCoordinate = (coordinate: Coordinate): Coordinate => ({
 const getViewerId = (viewerSide: PlayerSide): MatchPlayerId =>
   LOCAL_DEBUG_MATCH_PLAYER_IDS[viewerSide] ?? toMatchPlayerId("");
 
+const sanitizePlayerMatchView = (view: PlayerMatchView): PlayerMatchView => ({
+  ...view,
+  players: view.players.map((player) =>
+    player.id === view.viewerId
+      ? { ...player, reserveUnitIds: [...player.reserveUnitIds], flag: { ...player.flag } }
+      : { ...player, reserveUnitIds: [], flag: { ...player.flag } },
+  ),
+  units: view.units
+    .filter((unit) => unit.ownerId === view.viewerId || unit.revealed || view.phase !== "setup")
+    .map((unit) => {
+      if (unit.ownerId === view.viewerId || unit.revealed) {
+        return unit.revealed
+          ? { ...unit, position: unit.position === null ? null : cloneCoordinate(unit.position), card: { ...unit.card, abilityData: { ...unit.card.abilityData } } }
+          : { ...unit, position: unit.position === null ? null : cloneCoordinate(unit.position) };
+      }
+
+      return {
+        ...unit,
+        position: null,
+        status: view.phase === "setup" ? "reserve" : unit.status,
+      };
+    }),
+});
+
 const buildSafeView = (
   state: MatchState,
   viewerSide: PlayerSide,
-): Result<PlayerMatchView, RuleError> =>
-  buildPlayerMatchView({
+): Result<PlayerMatchView, RuleError> => {
+  const view = buildPlayerMatchView({
     state,
     viewerId: getViewerId(viewerSide),
     cardBackKey: LOCAL_DEBUG_CARD_BACK_KEY,
   });
+
+  if (!view.ok) return view;
+  return { ok: true, value: sanitizePlayerMatchView(view.value) };
+};
 
 const summarizeCoordinate = (coordinate: Coordinate | null | undefined): string =>
   coordinate === null || coordinate === undefined
@@ -201,6 +261,35 @@ const buildEventLog = (
     summary: summarizeEvent(event),
   }));
 
+const buildSetupInfo = (state: MatchState, viewerSide: PlayerSide): LocalDebugSetupInfo => {
+  const viewerId = getViewerId(viewerSide);
+  const player = state.players.find((candidate) => candidate.id === viewerId);
+  if (player === undefined || state.phase !== "setup") {
+    return { legalPlacementCoordinates: [] };
+  }
+
+  return {
+    legalPlacementCoordinates: getInitialPlacementCoordinates(
+      player.side,
+      state.boardSize,
+      TACTICAL_DUEL_RULE_CONFIG.initialPlacementDepth,
+    ).filter((coordinate) => {
+      const flagArea = isCoordinateInFlagArea({
+        coordinate,
+        side: player.side,
+        boardSize: state.boardSize,
+      });
+      if (!flagArea.ok || flagArea.value) return false;
+      return !state.units.some(
+        (unit) =>
+          unit.status === "board" &&
+          unit.position !== null &&
+          coordinateKey(unit.position) === coordinateKey(coordinate),
+      );
+    }),
+  };
+};
+
 const assertActiveMatch = (state: MatchState): Result<true, RuleError> => {
   if (state.phase === "finished" || state.winnerPlayerId !== null || state.winReason !== null) {
     return {
@@ -225,13 +314,10 @@ const assertActiveMatch = (state: MatchState): Result<true, RuleError> => {
   return { ok: true, value: true };
 };
 
-const assertViewerInMatch = (
+const assertViewerInAnyMatch = (
   state: MatchState,
   viewerSide: PlayerSide,
 ): Result<MatchPlayerId, RuleError> => {
-  const active = assertActiveMatch(state);
-  if (!active.ok) return active;
-
   const viewerId = getViewerId(viewerSide);
 
   if (!state.players.some((player) => player.id === viewerId)) {
@@ -244,6 +330,15 @@ const assertViewerInMatch = (
   }
 
   return { ok: true, value: viewerId };
+};
+
+const assertViewerInMatch = (
+  state: MatchState,
+  viewerSide: PlayerSide,
+): Result<MatchPlayerId, RuleError> => {
+  const active = assertActiveMatch(state);
+  if (!active.ok) return active;
+  return assertViewerInAnyMatch(state, viewerSide);
 };
 
 const assertViewerCanAct = (
@@ -330,6 +425,7 @@ export const getLocalDebugMatchView = (
       view: view.value,
       events: buildEventLog(store.events),
       stateStorageNote: LOCAL_DEBUG_STATE_STORAGE_NOTE,
+      setup: buildSetupInfo(store.state, viewerSide),
     },
   };
 };
@@ -642,11 +738,93 @@ export const submitLocalDebugConcedeMatch = (
   return getLocalDebugMatchView(input.viewerSide);
 };
 
-export const resetLocalDebugMatch = (
-  viewerSide: PlayerSide,
+
+const chooseFirstPlayerIdForStart = (
+  state: MatchState,
+  randomSource: FirstPlayerRandomSource,
+): Result<MatchPlayerId, RuleError> => {
+  const readyPlayers = state.players.filter((player) => player.setupSubmitted);
+  if (readyPlayers.length !== 2) {
+    return {
+      ok: false,
+      error: makeRuleError("INITIAL_PLACEMENT_NOT_COMPLETE", "Both players must submit initial placement before match start.", {
+        submittedPlayerIds: readyPlayers.map((player) => player.id),
+      }),
+    };
+  }
+
+  const orderedPlayers = [...readyPlayers].sort((left, right) => left.id.localeCompare(right.id));
+  const randomValue = randomSource();
+  const firstIndex = Number.isFinite(randomValue) && randomValue >= 0.5 ? 1 : 0;
+  return { ok: true, value: orderedPlayers[firstIndex].id };
+};
+
+const startMatchIfBothPlayersSubmitted = (
+  store: LocalDebugHarnessStore,
+): Result<true, RuleError> => {
+  if (store.state.phase !== "setup") return { ok: true, value: true };
+  if (!store.state.players.every((player) => player.setupSubmitted)) {
+    return { ok: true, value: true };
+  }
+
+  const firstPlayer = chooseFirstPlayerIdForStart(store.state, store.firstPlayerRandomSource);
+  if (!firstPlayer.ok) return firstPlayer;
+
+  const started = startTacticalDuelMatch({
+    state: store.state,
+    firstPlayerId: firstPlayer.value,
+    expectedStateVersion: store.state.stateVersion,
+    config: TACTICAL_DUEL_RULE_CONFIG,
+  });
+  if (!started.ok) return started;
+
+  store.state = started.value.state;
+  store.events.push(...started.value.events);
+  return { ok: true, value: true };
+};
+
+export const submitLocalDebugInitialPlacement = (
+  input: LocalDebugSubmitInitialPlacementActionInput,
 ): Result<LocalDebugViewResponse, RuleError> => {
   const store = getGlobalStore();
-  store.state = cloneInitialState();
+  const actor = assertViewerInAnyMatch(store.state, input.viewerSide);
+  if (!actor.ok) return actor;
+
+  const result = applyTacticalDuelAction({
+    state: store.state,
+    config: TACTICAL_DUEL_RULE_CONFIG,
+    action: {
+      type: "SUBMIT_INITIAL_PLACEMENT",
+      actionId: input.actionId,
+      matchId: store.state.id,
+      actorId: actor.value,
+      placements: input.placements.map((placement) => ({
+        unitId: placement.unitId,
+        position: cloneCoordinate(placement.position),
+        stance: placement.stance,
+      })),
+      reserveUnitIds: [...input.reserveUnitIds],
+      expectedStateVersion: input.expectedStateVersion,
+    },
+  });
+
+  if (!result.ok) return result;
+
+  store.state = result.value.state;
+  store.events.push(...result.value.events);
+
+  const startResult = startMatchIfBothPlayersSubmitted(store);
+  if (!startResult.ok) return startResult;
+
+  return getLocalDebugMatchView(input.viewerSide);
+};
+
+export const resetLocalDebugMatch = (
+  viewerSide: PlayerSide,
+  fixture: "setup" | "active" = "setup",
+): Result<LocalDebugViewResponse, RuleError> => {
+  const store = getGlobalStore();
+  store.state = fixture === "active" ? cloneActiveState() : cloneSetupState();
   store.events = [];
   return getLocalDebugMatchView(viewerSide);
 };
@@ -658,6 +836,12 @@ export const unsafeSetLocalDebugMatchStateForTests = (state: MatchState): void =
   const store = getGlobalStore();
   store.state = cloneJson(state);
   store.events = [];
+};
+
+export const unsafeSetFirstPlayerRandomSourceForTests = (
+  randomSource: FirstPlayerRandomSource,
+): void => {
+  getGlobalStore().firstPlayerRandomSource = randomSource;
 };
 
 export const toLocalDebugUnitId = (value: string): UnitId => toUnitId(value);

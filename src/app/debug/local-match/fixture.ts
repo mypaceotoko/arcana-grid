@@ -179,6 +179,111 @@ const cards = {
   }),
 };
 
+const setupCardKeys = [
+  "aegis",
+  "bolt",
+  "shade",
+  "oracle",
+  "guard",
+  "lancer",
+  "runner",
+  "warden",
+] as const;
+
+const makeSetupCard = (side: "north" | "south", index: number): CardSnapshot => {
+  const key = `${side}-setup-${setupCardKeys[index]}`;
+  const movementRule = index % 3 === 0 ? orthogonalLineRule : index % 3 === 1 ? diagonalLineRule : adjacentRule;
+  const movementType = index % 3 === 0 ? "orthogonal" : index % 3 === 1 ? "diagonal" : "adjacent";
+
+  return makeCard({
+    key,
+    name: `${side === "north" ? "North" : "South"} Setup ${index + 1}`,
+    movementRule,
+    movementType,
+    baseAttack: 1100 + index * 120,
+    baseDefense: 1500 + index * 100,
+    attribute: index % 2 === 0 ? "neutral" : side === "north" ? "dark" : "light",
+    rarity: index === 7 ? "rare" : "common",
+  });
+};
+
+const makeSetupUnits = (side: "north" | "south"): UnitState[] => {
+  const ownerId = LOCAL_DEBUG_MATCH_PLAYER_IDS[side];
+
+  return setupCardKeys.map((_, index) => {
+    const card = makeSetupCard(side, index);
+    return makeUnit({
+      id: `${side}-setup-${index + 1}`,
+      ownerId,
+      card,
+      row: null,
+      col: null,
+      status: "reserve",
+      stance: "defense",
+      currentDefense: card.baseDefense,
+    });
+  });
+};
+
+const makeSetupHiddenVisibilities = (): MatchState["unitVisibilities"] => [
+  ...makeSetupUnits("north").map((unit) => ({
+    unitId: unit.id,
+    viewerId: LOCAL_DEBUG_MATCH_PLAYER_IDS.south,
+    level: "hidden" as const,
+  })),
+  ...makeSetupUnits("south").map((unit) => ({
+    unitId: unit.id,
+    viewerId: LOCAL_DEBUG_MATCH_PLAYER_IDS.north,
+    level: "hidden" as const,
+  })),
+];
+
+export const localDebugSetupMatchState: MatchState = {
+  id: toMatchId("local-debug-match-task-7d-setup"),
+  gameMode: TACTICAL_DUEL_RULE_CONFIG.gameMode,
+  rulesVersion: TACTICAL_DUEL_RULES_VERSION,
+  boardSize: {
+    width: TACTICAL_DUEL_RULE_CONFIG.boardWidth,
+    height: TACTICAL_DUEL_RULE_CONFIG.boardHeight,
+  },
+  phase: "setup",
+  players: [
+    {
+      id: LOCAL_DEBUG_MATCH_PLAYER_IDS.north,
+      playerId: toPlayerId("local-debug-account-north"),
+      side: "north",
+      reserveUnitIds: [],
+      setupSubmitted: false,
+      flag: {
+        ownerId: LOCAL_DEBUG_MATCH_PLAYER_IDS.north,
+        damage: 0,
+        maxDamage: TACTICAL_DUEL_RULE_CONFIG.flagMaxDamage,
+      },
+      connected: true,
+    },
+    {
+      id: LOCAL_DEBUG_MATCH_PLAYER_IDS.south,
+      playerId: toPlayerId("local-debug-account-south"),
+      side: "south",
+      reserveUnitIds: [],
+      setupSubmitted: false,
+      flag: {
+        ownerId: LOCAL_DEBUG_MATCH_PLAYER_IDS.south,
+        damage: 0,
+        maxDamage: TACTICAL_DUEL_RULE_CONFIG.flagMaxDamage,
+      },
+      connected: true,
+    },
+  ],
+  units: [...makeSetupUnits("north"), ...makeSetupUnits("south")],
+  unitVisibilities: makeSetupHiddenVisibilities(),
+  currentTurnPlayerId: null,
+  turnNumber: 0,
+  stateVersion: 1,
+  winnerPlayerId: null,
+  winReason: null,
+};
+
 export const localDebugMatchState: MatchState = {
   id: toMatchId("local-debug-match-task-7a"),
   gameMode: TACTICAL_DUEL_RULE_CONFIG.gameMode,
