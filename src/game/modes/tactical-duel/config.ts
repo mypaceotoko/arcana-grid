@@ -10,6 +10,7 @@ export const TACTICAL_DUEL_RULE_CONFIG: TacticalRuleConfig = {
   boardHeight: 8,
   initialUnitCount: 6,
   reserveUnitCount: 2,
+  initialPlacementDepth: 2,
   flagMaxDamage: 3,
   sameCharacterLimit: 1,
   friendlyPassThrough: true,

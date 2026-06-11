@@ -7,6 +7,7 @@ export type TacticalRuleConfig = {
   boardHeight: number;
   initialUnitCount: number;
   reserveUnitCount: number;
+  initialPlacementDepth: number;
   flagMaxDamage: number;
   sameCharacterLimit: number;
   friendlyPassThrough: boolean;
