@@ -9,12 +9,18 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "supabase:start": "npx supabase@latest start",
+    "supabase:stop": "npx supabase@latest stop",
+    "supabase:reset": "npx supabase@latest db reset",
+    "supabase:types": "npx supabase@latest gen types typescript --local > src/lib/supabase/database.generated.ts"
   },
   "dependencies": {
     "next": "16.2.7",
     "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "react-dom": "19.2.0",
+    "@supabase/ssr": "0.10.3",
+    "@supabase/supabase-js": "2.99.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.0",
