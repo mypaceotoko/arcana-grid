@@ -845,18 +845,18 @@ export default function LocalMatchDebugClient({
         ) : null}
 
         {isSetupPhase ? (
-          <section className="rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
+          <section className="w-full min-w-0 max-w-full overflow-x-hidden rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-3">
+            <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+              <div className="min-w-0">
                 <h2 className="text-base font-bold text-cyan-50">初期配置</h2>
                 <p className="mt-1 text-xs text-cyan-100/80">カードを選び、盤面の「初」マスへ6体配置します。</p>
               </div>
-              <div className="grid min-w-24 grid-cols-2 gap-1 text-center text-[0.65rem] font-bold">
+              <div className="grid w-full min-w-0 grid-cols-2 gap-1 text-center text-[0.65rem] font-bold sm:w-auto sm:min-w-24">
                 <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">配置 {setupPlacements.length}/6</span>
                 <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">予備 {setupReserveUnitIds.length}/2</span>
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-200">
+            <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs text-slate-200 sm:grid-cols-2">
               <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">自分: {setupSubmitted ? "準備完了" : "未提出"}</span>
               <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">相手: {opponentSetupSubmitted ? "準備完了" : "未完了"}</span>
             </div>
@@ -865,10 +865,10 @@ export default function LocalMatchDebugClient({
                 提出済みです。再提出はできません。相手の具体的な配置・リザーバーは表示しません。
               </p>
             ) : (
-              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
-                <div>
+              <div className="mt-4 grid min-w-0 max-w-full grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
+                <div className="min-w-0">
                   <h3 className="text-sm font-bold text-white">自分のカード</h3>
-                  <div className="mt-2 flex snap-x gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
                     {ownSetupUnits.map((unit) => {
                       const placement = setupPlacementByUnitId.get(unit.unitId);
                       const selected = setupSelectedUnitId === unit.unitId;
@@ -878,7 +878,7 @@ export default function LocalMatchDebugClient({
                           type="button"
                           onClick={() => selectSetupUnit(unit.unitId)}
                           disabled={setupSubmitted || isPending}
-                          className={`min-h-16 min-w-36 snap-start rounded-2xl border px-3 py-2 text-left text-xs transition disabled:opacity-40 ${
+                          className={`min-h-16 w-full min-w-0 max-w-full rounded-2xl border px-3 py-2 text-left text-xs transition disabled:opacity-40 ${
                             selected
                               ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/70"
                               : setupReserveIdSet.has(unit.unitId)
@@ -888,31 +888,31 @@ export default function LocalMatchDebugClient({
                                   : "border-slate-700 bg-slate-950/80 text-slate-300"
                           }`}
                         >
-                          <span className="block font-bold text-white">{unit.revealed ? unit.card.cardName : compactId(unit.unitId)}</span>
-                          <span className="text-slate-400">{placement === undefined ? "未配置" : toCoordinateLabel(placement.position)}</span>
+                          <span className="block min-w-0 break-words font-bold text-white">{unit.revealed ? unit.card.cardName : compactId(unit.unitId)}</span>
+                          <span className="block min-w-0 break-words text-slate-400">{placement === undefined ? "未配置" : toCoordinateLabel(placement.position)}</span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
-                <div className="grid gap-3">
-                  <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3">
+                <div className="grid min-w-0 gap-3">
+                  <div className="min-w-0 rounded-2xl border border-slate-700 bg-slate-950/70 p-3">
                     <h3 className="text-sm font-bold text-white">選択中</h3>
-                    <p className="mt-1 text-xs text-slate-400">
+                    <p className="mt-1 min-w-0 break-words text-xs text-slate-400">
                       {selectedSetupUnit === null ? "カードを選択してください。" : `${selectedSetupUnit.revealed ? selectedSetupUnit.card.cardName : compactId(selectedSetupUnit.unitId)} を配置またはリザーブ指定できます。`}
                     </p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="text-sm font-bold text-white">仮配置済み</h3>
-                    <div className="mt-2 grid gap-2">
+                    <div className="mt-2 grid min-w-0 gap-2">
                       {setupPlacements.length === 0 ? <p className="text-xs text-slate-400">なし</p> : setupPlacements.map((placement) => {
                         const unit = ownSetupUnits.find((candidate) => candidate.unitId === placement.unitId);
                         return (
-                          <div key={placement.unitId} className="rounded-2xl border border-slate-700 bg-slate-950/80 p-3 text-xs">
-                            <button type="button" onClick={() => selectSetupUnit(placement.unitId)} className="font-bold text-cyan-100">
+                          <div key={placement.unitId} className="min-w-0 rounded-2xl border border-slate-700 bg-slate-950/80 p-3 text-xs">
+                            <button type="button" onClick={() => selectSetupUnit(placement.unitId)} className="max-w-full break-words text-left font-bold text-cyan-100">
                               {unit?.revealed ? unit.card.cardName : compactId(placement.unitId)} / {toCoordinateLabel(placement.position)}
                             </button>
-                            <div className="mt-2 grid grid-cols-3 gap-2">
+                            <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
                               {(["attack", "defense"] as const).map((stance) => (
                                 <button key={stance} type="button" onClick={() => updateSetupStance(placement.unitId, stance)} className={`min-h-10 rounded-xl border px-2 py-2 font-bold ${placement.stance === stance ? "border-cyan-200 bg-cyan-300/20 text-cyan-50" : "border-slate-700 text-slate-300"}`}>{stanceLabel(stance)} {stance}</button>
                               ))}
@@ -923,16 +923,16 @@ export default function LocalMatchDebugClient({
                       })}
                     </div>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="text-sm font-bold text-white">リザーバー予定</h3>
-                    <div className="mt-2 grid grid-cols-2 gap-2">
+                    <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
                       {ownSetupUnits.map((unit) => (
                         <button
                           key={`reserve-${unit.unitId}`}
                           type="button"
                           disabled={setupSubmitted || isPending || (!setupReserveIdSet.has(unit.unitId) && setupReserveUnitIds.length >= 2)}
                           onClick={() => toggleSetupReserve(unit.unitId)}
-                          className={`min-h-11 rounded-2xl border px-3 py-2 text-left text-xs disabled:opacity-40 ${setupReserveIdSet.has(unit.unitId) ? "border-emerald-200 bg-emerald-300/20 text-emerald-50" : "border-slate-700 bg-slate-950/80 text-slate-300"}`}
+                          className={`min-h-11 w-full min-w-0 max-w-full break-words rounded-2xl border px-3 py-2 text-left text-xs disabled:opacity-40 ${setupReserveIdSet.has(unit.unitId) ? "border-emerald-200 bg-emerald-300/20 text-emerald-50" : "border-slate-700 bg-slate-950/80 text-slate-300"}`}
                         >
                           {unit.revealed ? unit.card.cardName : compactId(unit.unitId)}
                         </button>
