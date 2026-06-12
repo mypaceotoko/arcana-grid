@@ -281,7 +281,13 @@ const summarizeEvent = (event: GameEventPayload): string => {
     case "UNIT_REVEALED":
       return `${event.unitId}: ${event.reason}で${event.viewerId}へ公開`;
     case "COMBAT_RESOLVED":
-      return `${event.attackerUnitId} vs ${event.defenderUnitId}`;
+      return [
+        `${event.attackerUnitId}(${event.attackerStance} ATK${event.attackerAttack} DEF${event.attackerDefenseBefore}→${event.attackerDefenseAfter})`,
+        "vs",
+        `${event.defenderUnitId}(${event.defenderStance} ATK${event.defenderAttack} DEF${event.defenderDefenseBefore}→${event.defenderDefenseAfter})`,
+        `/ ${event.outcome}`,
+        `/ ${event.attackerMovedToDestination ? "攻撃側が移動" : "攻撃側は元位置"}`,
+      ].join(" ");
     case "DEFENSE_CHANGED":
       return `${event.unitId}: ${event.previousDefense} → ${event.nextDefense}`;
     case "UNIT_DEFEATED":
@@ -835,6 +841,37 @@ export class LocalDebugBrowserHarness {
   }): Result<LocalDebugViewResponse, RuleError> {
     const actor = assertViewerCanAct(this.store.state, input.viewerSide);
     if (!actor.ok) return actor;
+    const unit = this.store.state.units.find(
+      (candidate) => candidate.id === input.unitId,
+    );
+    if (unit === undefined) {
+      return {
+        ok: false,
+        error: makeRuleError("UNIT_NOT_FOUND", "Reserve unit was not found.", {
+          unitId: input.unitId,
+        }),
+      };
+    }
+    if (unit.ownerId !== actor.value) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "UNIT_NOT_OWNED",
+          "Viewer does not own the reserve unit.",
+          { unitId: input.unitId, ownerId: unit.ownerId, viewerId: actor.value },
+        ),
+      };
+    }
+    if (unit.status !== "reserve" || unit.position !== null) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "UNIT_NOT_IN_RESERVE",
+          "Only reserve units can be deployed.",
+          { unitId: input.unitId, status: unit.status },
+        ),
+      };
+    }
     return this.applyAction(input.viewerSide, {
       type: "DEPLOY_RESERVE",
       actionId: input.actionId,

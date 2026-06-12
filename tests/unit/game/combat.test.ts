@@ -268,6 +268,15 @@ describe("resolveCombat events", () => {
       type: "COMBAT_RESOLVED",
       attackerUnitId: toUnitId("attacker"),
       defenderUnitId: toUnitId("defender"),
+      attackerStance: "attack",
+      defenderStance: "attack",
+      attackerAttack: 3000,
+      defenderAttack: 2000,
+      attackerDefenseBefore: 2500,
+      attackerDefenseAfter: 500,
+      defenderDefenseAfter: 0,
+      attackerMovedToDestination: true,
+      outcome: "attacker_survived_attack_clash",
     });
     expect(result.events[1]).toMatchObject({
       type: "DEFENSE_CHANGED",

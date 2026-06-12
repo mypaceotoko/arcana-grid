@@ -65,20 +65,35 @@ const coordinateKey = (coordinate: Coordinate): string =>
 const makeActionId = (): string =>
   `local-debug-action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-const formatDebugRuleError = (error: RuleError): string => {
-  const details =
-    error.details === undefined
-      ? ""
-      : ` / 詳細: ${JSON.stringify(error.details)}`;
+const debugRuleErrorMessage = (error: RuleError): string => {
+  if (error.code === "RESERVE_DEPLOYMENT_LIMIT_REACHED") {
+    return "盤面に6体いるため、リザーバーは投入できません。";
+  }
+  if (error.code === "NOT_YOUR_TURN") return "現在は相手の手番です。";
+  if (error.code === "UNIT_NOT_IN_RESERVE") return "選択したカードはリザーバーではありません。";
+  if (error.code === "UNIT_NOT_ON_BOARD") return "盤面上のユニットを選択してください。";
+  if (error.code === "DESTINATION_NOT_LEGAL") return "そのマスへは移動できません。";
+  if (error.code === "FLAG_ATTACK_NOT_LEGAL") return "その旗エリアへは攻撃できません。";
   if (
     error.code === "INVALID_ACTION" &&
     error.details?.requiredSide === "south"
   ) {
-    return `プレイヤー1の配置確定が正しく保存されていません。完全初期化してやり直してください。 (${error.code}: ${error.message}${details})`;
+    return "プレイヤー1の配置確定が正しく保存されていません。完全初期化してやり直してください。";
   }
 
-  return `処理に失敗しました。完全初期化して再実行しても続く場合はデバッグ詳細を確認してください。 (${error.code}: ${error.message}${details})`;
+  return "処理に失敗しました。完全初期化して再実行しても続く場合はデバッグ詳細を確認してください。";
 };
+
+const formatDebugRuleErrorDetails = (error: RuleError): string =>
+  JSON.stringify(
+    {
+      code: error.code,
+      message: error.message,
+      details: error.details ?? null,
+    },
+    null,
+    2,
+  );
 
 const getUnitToken = (unit: UnitView): string => {
   if (!unit.revealed) return "伏";
@@ -174,7 +189,7 @@ const flagSegments = (player: MatchPlayerState): boolean[] =>
 const selectedActionLabel = (actionMode: ActionMode): string => {
   switch (actionMode) {
     case "move":
-      return "移動/戦闘";
+      return "通常移動 / 敵ユニットと戦闘";
     case "deploy":
       return "リザーバー投入";
     case "flag_attack":
@@ -191,6 +206,19 @@ const playerDisplayName = (side: PlayerSide): string =>
 
 const playerAreaLabel = (side: PlayerSide): string =>
   side === "south" ? "自陣" : "相手陣";
+
+const actionVerbLabel = (candidate: BoardCandidate): string => {
+  switch (candidate.kind) {
+    case "move":
+      return "通常移動";
+    case "engage":
+      return "敵ユニットと戦闘";
+    case "deploy":
+      return "リザーバー投入";
+    case "flag_attack":
+      return "旗を攻撃";
+  }
+};
 
 const formatPlayerLabel = (
   view: PlayerMatchView,
@@ -265,7 +293,7 @@ const FlagPanel = ({
     <div className="flex items-center justify-between gap-3">
       <div>
         <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-slate-400">
-          Flag
+          旗エリア
         </p>
         <p className="mt-0.5 text-sm font-bold text-white">
           {formatPlayerLabel(view, player)}
@@ -285,7 +313,7 @@ const FlagPanel = ({
     </div>
     {!compact ? (
       <p className="mt-2 text-[0.68rem] leading-4 text-slate-400">
-        3段階の旗ダメージ。満了で旗破壊勝利です。
+        中央2マスで1つの旗エリアです。どちらかへの旗攻撃成功で共通ダメージが1増え、3で旗破壊勝利です。
       </p>
     ) : null}
   </div>
@@ -575,6 +603,26 @@ const SetupPlacementMenu = ({
   </div>
 );
 
+const LastCombatPanel = ({
+  events,
+}: {
+  events: readonly LocalDebugEventLogEntry[];
+}) => {
+  const combat = [...events].reverse().find((event) => event.type === "COMBAT_RESOLVED");
+
+  if (combat === undefined) return null;
+
+  return (
+    <section className="rounded-3xl border border-rose-300/40 bg-rose-500/10 p-3 text-xs leading-5 text-rose-50">
+      <h2 className="text-sm font-black text-white">直近の戦闘結果</h2>
+      <p className="mt-2">{combat.summary}</p>
+      <p className="mt-2 text-rose-100/80">
+        ATK比較、防御値変化、消滅、攻撃側の移動有無、次手番はreducerが返したイベントログから表示しています。未公開カード名は表示しません。
+      </p>
+    </section>
+  );
+};
+
 const EventLog = ({
   events,
 }: {
@@ -629,7 +677,7 @@ export default function LocalMatchDebugClient({
   const [setupPlacements, setSetupPlacements] = useState<
     readonly SetupDraftPlacement[]
   >([]);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [error, setError] = useState<RuleError | null>(null);
   const [isPending, startTransition] = useTransition();
   const browserHarnessRef = useRef<ReturnType<
     typeof createLocalDebugBrowserHarness
@@ -780,7 +828,7 @@ export default function LocalMatchDebugClient({
 
     queueMicrotask(() => {
       if (!response.ok) {
-        setErrorMessage(formatDebugRuleError(response.error));
+        setError(response.error);
         return;
       }
 
@@ -790,11 +838,12 @@ export default function LocalMatchDebugClient({
   }, []);
 
   const fetchBoardCandidates = (unitId: UnitView["unitId"]) => {
-    setErrorMessage(null);
+    resetSelection();
+    setError(null);
     startTransition(async () => {
       const harness = browserHarnessRef.current;
       if (harness === null) {
-        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        setError({ code: "INVALID_ACTION", message: "ブラウザ内デバッグ保存の初期化中です。" });
         return;
       }
 
@@ -806,12 +855,12 @@ export default function LocalMatchDebugClient({
 
       if (!moveResponse.ok) {
         resetSelection();
-        setErrorMessage(formatDebugRuleError(moveResponse.error));
+        setError(moveResponse.error);
         return;
       }
       if (!flagResponse.ok) {
         resetSelection();
-        setErrorMessage(formatDebugRuleError(flagResponse.error));
+        setError(flagResponse.error);
         return;
       }
 
@@ -827,11 +876,12 @@ export default function LocalMatchDebugClient({
   };
 
   const fetchReserveCandidates = (unitId: UnitView["unitId"]) => {
-    setErrorMessage(null);
+    resetSelection();
+    setError(null);
     startTransition(async () => {
       const harness = browserHarnessRef.current;
       if (harness === null) {
-        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        setError({ code: "INVALID_ACTION", message: "ブラウザ内デバッグ保存の初期化中です。" });
         return;
       }
 
@@ -842,7 +892,7 @@ export default function LocalMatchDebugClient({
 
       if (!response.ok) {
         resetSelection();
-        setErrorMessage(formatDebugRuleError(response.error));
+        setError(response.error);
         return;
       }
 
@@ -860,18 +910,18 @@ export default function LocalMatchDebugClient({
   };
 
   const refreshView = (side: PlayerSide) => {
-    setErrorMessage(null);
+    setError(null);
     startTransition(() => {
       const harness = browserHarnessRef.current;
       if (harness === null) {
-        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        setError({ code: "INVALID_ACTION", message: "ブラウザ内デバッグ保存の初期化中です。" });
         return;
       }
 
       const response = harness.getView(side);
 
       if (!response.ok) {
-        setErrorMessage(formatDebugRuleError(response.error));
+        setError(response.error);
         return;
       }
 
@@ -949,11 +999,11 @@ export default function LocalMatchDebugClient({
   };
 
   const submitSetupPlacement = () => {
-    setErrorMessage(null);
+    setError(null);
     startTransition(() => {
       const harness = browserHarnessRef.current;
       if (harness === null) {
-        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        setError({ code: "INVALID_ACTION", message: "ブラウザ内デバッグ保存の初期化中です。" });
         return;
       }
 
@@ -970,7 +1020,7 @@ export default function LocalMatchDebugClient({
       });
 
       if (!response.ok) {
-        setErrorMessage(formatDebugRuleError(response.error));
+        setError(response.error);
         return;
       }
 
@@ -980,11 +1030,11 @@ export default function LocalMatchDebugClient({
 
   const submitSelectedAction = () => {
     if (actionMode === "concede") {
-      setErrorMessage(null);
+      setError(null);
       startTransition(() => {
         const harness = browserHarnessRef.current;
         if (harness === null) {
-          setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+          setError({ code: "INVALID_ACTION", message: "ブラウザ内デバッグ保存の初期化中です。" });
           return;
         }
 
@@ -995,7 +1045,7 @@ export default function LocalMatchDebugClient({
         });
 
         if (!response.ok) {
-          setErrorMessage(formatDebugRuleError(response.error));
+          setError(response.error);
           return;
         }
 
@@ -1007,17 +1057,29 @@ export default function LocalMatchDebugClient({
     if (selectedUnitId === null || selectedDestination === null) return;
 
     const actionType =
-      selectedDestination.kind === "flag_attack"
+      actionMode === "flag_attack" && selectedDestination.kind === "flag_attack"
         ? "ATTACK_FLAG"
-        : selectedDestination.kind === "deploy"
+        : actionMode === "deploy" && selectedDestination.kind === "deploy"
           ? "DEPLOY_RESERVE"
-          : "MOVE_UNIT";
+          : actionMode === "move" && selectedDestination.kind !== "deploy" && selectedDestination.kind !== "flag_attack"
+            ? "MOVE_UNIT"
+            : null;
 
-    setErrorMessage(null);
+    if (actionType === null) {
+      resetSelection();
+      setError({
+        code: "INVALID_ACTION",
+        message: "操作モードと対象マスが一致しません。もう一度ユニットを選択してください。",
+        details: { actionMode, destinationKind: selectedDestination.kind },
+      });
+      return;
+    }
+
+    setError(null);
     startTransition(() => {
       const harness = browserHarnessRef.current;
       if (harness === null) {
-        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        setError({ code: "INVALID_ACTION", message: "ブラウザ内デバッグ保存の初期化中です。" });
         return;
       }
 
@@ -1050,7 +1112,7 @@ export default function LocalMatchDebugClient({
               });
 
       if (!response.ok) {
-        setErrorMessage(formatDebugRuleError(response.error));
+        setError(response.error);
         return;
       }
 
@@ -1059,18 +1121,18 @@ export default function LocalMatchDebugClient({
   };
 
   const resetMatch = (fixture: "setup" | "active") => {
-    setErrorMessage(null);
+    setError(null);
     startTransition(() => {
       const harness = browserHarnessRef.current;
       if (harness === null) {
-        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        setError({ code: "INVALID_ACTION", message: "ブラウザ内デバッグ保存の初期化中です。" });
         return;
       }
 
       const response = harness.reset(viewerSide, fixture);
 
       if (!response.ok) {
-        setErrorMessage(formatDebugRuleError(response.error));
+        setError(response.error);
         return;
       }
 
@@ -1079,17 +1141,17 @@ export default function LocalMatchDebugClient({
   };
 
   const clearSavedMatch = () => {
-    setErrorMessage(null);
+    setError(null);
     startTransition(() => {
       const harness = browserHarnessRef.current;
       if (harness === null) {
-        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        setError({ code: "INVALID_ACTION", message: "ブラウザ内デバッグ保存の初期化中です。" });
         return;
       }
 
       const response = harness.clear("south");
       if (!response.ok) {
-        setErrorMessage(formatDebugRuleError(response.error));
+        setError(response.error);
         return;
       }
 
@@ -1150,7 +1212,7 @@ export default function LocalMatchDebugClient({
       return "ユニットを選び、強調表示された候補マスをタップしてください。";
     }
 
-    return `${selectedDestination.kind === "flag_attack" ? "ATTACK_FLAG" : selectedDestination.kind === "deploy" ? "DEPLOY_RESERVE" : "MOVE_UNIT"}: ${compactId(selectedUnitId)} → ${toCoordinateLabel(selectedDestination.destination)} (${candidateLabel(selectedDestination)}) / ${nextStance}表示`;
+    return `操作ユニット: ${compactId(selectedUnitId)} / 操作種別: ${actionVerbLabel(selectedDestination)} / 移動元: ${selectedUnit?.position === undefined ? "—" : toCoordinateLabel(selectedUnit.position)} / 対象: ${toCoordinateLabel(selectedDestination.destination)} / 移動後stance: ${stanceLabel(nextStance)} (${nextStance})`;
   };
 
   return (
@@ -1210,6 +1272,18 @@ export default function LocalMatchDebugClient({
             正式オンライン保存ではありません。この端末だけに保存され、公開URLでもサーバーメモリに依存せず復元します。
           </p>
         </section>
+
+        <details className="rounded-3xl border border-slate-700 bg-slate-900/80 p-3 text-xs leading-5 text-slate-200" open>
+          <summary className="cursor-pointer text-sm font-black text-white">遊び方・ルール</summary>
+          <ul className="mt-2 grid gap-1 pl-4 list-disc">
+            <li>1ターンに1体を操作します。</li>
+            <li>自分のユニットを選び、○移動・⚔戦闘・旗攻撃の候補マスを選びます。</li>
+            <li>移動後の攻/守表示を選択してから実行します。</li>
+            <li>縦横・斜めタイプは盤面端まで移動可能。味方は通過可能、敵は通過不可です。</li>
+            <li>相手ユニット全滅、または中央2マスで1つの旗エリアへ3回攻撃すると勝利です。</li>
+            <li>リザーバー投入は盤面が6体未満の時だけ可能で、1ターン消費します。</li>
+          </ul>
+        </details>
 
         {view.phase === "finished" ? (
           <section
@@ -1293,13 +1367,19 @@ export default function LocalMatchDebugClient({
           </p>
         </section>
 
-        {errorMessage !== null ? (
-          <div
+        {error !== null ? (
+          <section
             className="rounded-2xl border border-rose-300/50 bg-rose-500/15 p-3 text-sm font-semibold text-rose-100"
             role="alert"
           >
-            操作できません: {errorMessage}
-          </div>
+            <p>操作できません: {debugRuleErrorMessage(error)}</p>
+            <details className="mt-2 text-xs font-normal text-rose-100/80">
+              <summary className="cursor-pointer">デバッグ詳細</summary>
+              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950/70 p-2">
+                {formatDebugRuleErrorDetails(error)}
+              </pre>
+            </details>
+          </section>
         ) : null}
 
         {isPending ? (
@@ -1494,7 +1574,11 @@ export default function LocalMatchDebugClient({
                         : (ownSetupUnits.find(
                             (unit) => unit.unitId === setupDraft.unitId,
                           ) ?? null);
-                    const unit = isSetupPhase ? setupDraftUnit : cell.unit;
+                    const unit = isSetupPhase
+                      ? setupDraftUnit?.revealed === true && setupDraft !== undefined
+                        ? { ...setupDraftUnit, stance: setupDraft.stance }
+                        : setupDraftUnit
+                      : cell.unit;
                     const coordinate = coordinateKey(cell.coordinate);
                     const isFlagCell = flagCoordinateKeys.has(coordinate);
                     const setupLegal =
@@ -1522,7 +1606,7 @@ export default function LocalMatchDebugClient({
                       selectedDestination !== null &&
                       coordinateKey(selectedDestination.destination) ===
                         coordinate;
-                    const cellLabel = `${toCoordinateLabel(cell.coordinate)}${isFlagCell ? " 旗 配置不可" : ""}${candidate === undefined ? "" : ` ${candidateLabel(candidate)}`}${unit === null ? " empty" : ` ${isOwnUnit(view, unit) ? "own" : "enemy"} ${unit.revealed ? "revealed" : "hidden"}`}`;
+                    const cellLabel = `${toCoordinateLabel(cell.coordinate)}${isFlagCell ? " 旗エリア 配置停止不可" : ""}${candidate === undefined ? "" : ` ${candidateLabel(candidate)}`}${unit === null ? " empty" : ` ${isOwnUnit(view, unit) ? "own" : "enemy"} ${unit.revealed ? "revealed" : "hidden"}`}`;
                     return (
                       <div key={coordinate} className="relative min-w-0">
                         <button
@@ -1559,7 +1643,7 @@ export default function LocalMatchDebugClient({
                           ) : null}
                           {isFlagCell ? (
                             <span className="absolute inset-x-1 bottom-0.5 z-10 rounded border border-amber-200/60 bg-amber-400/20 px-0.5 text-center text-[0.5rem] font-black text-amber-50">
-                              ⚑旗
+                              旗エリア
                             </span>
                           ) : null}
                           {unit === null ? (
@@ -1722,6 +1806,8 @@ export default function LocalMatchDebugClient({
             ))}
           </section>
         ) : null}
+
+        {!isSetupPhase ? <LastCombatPanel events={data.events} /> : null}
 
         {!isSetupPhase ? <DetailPanel unit={selectedUnit} /> : null}
 
