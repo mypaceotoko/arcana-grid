@@ -9,6 +9,7 @@ import type {
   MatchPlayerState,
   PlayerMatchView,
   PlayerSide,
+  RuleError,
   Stance,
   UnitId,
   UnitView,
@@ -42,7 +43,11 @@ type LocalMatchDebugClientProps = {
 };
 
 type ActionMode = "none" | "move" | "deploy" | "flag_attack" | "concede";
-type SetupDraftPlacement = { unitId: UnitId; position: Coordinate; stance: Stance };
+type SetupDraftPlacement = {
+  unitId: UnitId;
+  position: Coordinate;
+  stance: Stance;
+};
 type SetupSelectedCell = { position: Coordinate };
 type ActionStep = "idle" | "destination" | "stance" | "confirm";
 type BoardCandidate =
@@ -59,6 +64,21 @@ const coordinateKey = (coordinate: Coordinate): string =>
 
 const makeActionId = (): string =>
   `local-debug-action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const formatDebugRuleError = (error: RuleError): string => {
+  const details =
+    error.details === undefined
+      ? ""
+      : ` / 詳細: ${JSON.stringify(error.details)}`;
+  if (
+    error.code === "INVALID_ACTION" &&
+    error.details?.requiredSide === "south"
+  ) {
+    return `プレイヤー1の配置確定が正しく保存されていません。完全初期化してやり直してください。 (${error.code}: ${error.message}${details})`;
+  }
+
+  return `処理に失敗しました。完全初期化して再実行しても続く場合はデバッグ詳細を確認してください。 (${error.code}: ${error.message}${details})`;
+};
 
 const getUnitToken = (unit: UnitView): string => {
   if (!unit.revealed) return "伏";
@@ -146,7 +166,10 @@ const countCandidates = (
 ): number => candidates.filter((candidate) => candidate.kind === kind).length;
 
 const flagSegments = (player: MatchPlayerState): boolean[] =>
-  Array.from({ length: player.flag.maxDamage }, (_, index) => index < player.flag.damage);
+  Array.from(
+    { length: player.flag.maxDamage },
+    (_, index) => index < player.flag.damage,
+  );
 
 const selectedActionLabel = (actionMode: ActionMode): string => {
   switch (actionMode) {
@@ -169,7 +192,10 @@ const playerDisplayName = (side: PlayerSide): string =>
 const playerAreaLabel = (side: PlayerSide): string =>
   side === "south" ? "自陣" : "相手陣";
 
-const formatPlayerLabel = (view: PlayerMatchView, player: MatchPlayerState): string =>
+const formatPlayerLabel = (
+  view: PlayerMatchView,
+  player: MatchPlayerState,
+): string =>
   `${playerDisplayName(player.side)}${player.id === view.viewerId ? " / 自分" : " / 相手"}`;
 
 const UnitPill = ({
@@ -201,7 +227,10 @@ const UnitPill = ({
 };
 
 const FlagDamageMeter = ({ player }: { player: MatchPlayerState }) => (
-  <div className="flex items-center gap-1" aria-label={`${player.side} flag damage ${player.flag.damage} of ${player.flag.maxDamage}`}>
+  <div
+    className="flex items-center gap-1"
+    aria-label={`${player.side} flag damage ${player.flag.damage} of ${player.flag.maxDamage}`}
+  >
     {flagSegments(player).map((damaged, index) => (
       <span
         key={`${player.id}-flag-${index}`}
@@ -313,7 +342,9 @@ const ReservePanel = ({
                 <span className="font-bold">
                   {unit.revealed ? unit.card.cardName : "伏せカード"}
                 </span>
-                <span className="block text-slate-400">{compactId(unit.unitId)}</span>
+                <span className="block text-slate-400">
+                  {compactId(unit.unitId)}
+                </span>
               </button>
             );
           })
@@ -342,7 +373,9 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-bold text-white">選択中カード</h2>
-          <p className="mt-1 text-xs text-slate-400">{compactId(detail.unitId)}</p>
+          <p className="mt-1 text-xs text-slate-400">
+            {compactId(detail.unitId)}
+          </p>
         </div>
         <span className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1 text-xs font-bold text-cyan-100">
           {detail.visibilityLabel}
@@ -351,7 +384,9 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
       <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
           <dt className="text-xs text-slate-500">Owner</dt>
-          <dd className="break-words text-slate-100">{compactId(detail.ownerId)}</dd>
+          <dd className="break-words text-slate-100">
+            {compactId(detail.ownerId)}
+          </dd>
         </div>
         <div>
           <dt className="text-xs text-slate-500">Position</dt>
@@ -371,7 +406,9 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
           <>
             <div className="col-span-2 rounded-2xl border border-slate-700 bg-slate-950/60 p-3">
               <dt className="text-xs text-slate-500">Card</dt>
-              <dd className="text-base font-bold text-slate-100">{detail.cardName}</dd>
+              <dd className="text-base font-bold text-slate-100">
+                {detail.cardName}
+              </dd>
             </div>
             <div>
               <dt className="text-xs text-slate-500">Stance</dt>
@@ -399,7 +436,6 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
     </section>
   );
 };
-
 
 const SetupPlacementMenu = ({
   coordinate,
@@ -437,8 +473,12 @@ const SetupPlacementMenu = ({
   >
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
-        <p className="text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-cyan-100/70">配置メニュー</p>
-        <h3 className="mt-0.5 text-sm font-black text-white">{toCoordinateLabel(coordinate)}</h3>
+        <p className="text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-cyan-100/70">
+          配置メニュー
+        </p>
+        <h3 className="mt-0.5 text-sm font-black text-white">
+          {toCoordinateLabel(coordinate)}
+        </h3>
       </div>
       <button
         type="button"
@@ -452,10 +492,14 @@ const SetupPlacementMenu = ({
     <div className="mt-2 grid max-h-36 grid-cols-2 gap-1.5 overflow-y-auto pr-1">
       {units.map((unit) => {
         const placement = placementByUnitId.get(unit.unitId);
-        const placedAtSelectedCell = placement !== undefined && coordinateKey(placement.position) === selectedCoordinateKey;
+        const placedAtSelectedCell =
+          placement !== undefined &&
+          coordinateKey(placement.position) === selectedCoordinateKey;
         const disabled = placement !== undefined && !placedAtSelectedCell;
         const selected = selectedUnitId === unit.unitId;
-        const cardName = unit.revealed ? unit.card.cardName : compactId(unit.unitId);
+        const cardName = unit.revealed
+          ? unit.card.cardName
+          : compactId(unit.unitId);
         return (
           <button
             key={`setup-popover-card-${unit.unitId}`}
@@ -471,9 +515,15 @@ const SetupPlacementMenu = ({
             }`}
             aria-pressed={selected}
           >
-            <span className="block truncate font-black text-white">{cardName}</span>
+            <span className="block truncate font-black text-white">
+              {cardName}
+            </span>
             <span className="block truncate text-[0.58rem] text-slate-400">
-              {placement === undefined ? "未配置" : placedAtSelectedCell ? "このマス" : "配置済み"}
+              {placement === undefined
+                ? "未配置"
+                : placedAtSelectedCell
+                  ? "このマス"
+                  : "配置済み"}
             </span>
           </button>
         );
@@ -514,7 +564,9 @@ const SetupPlacementMenu = ({
       <button
         type="button"
         onClick={onPlace}
-        disabled={selectedUnitId === null || selectedStance === null || isPending}
+        disabled={
+          selectedUnitId === null || selectedStance === null || isPending
+        }
         className="min-h-10 rounded-xl border border-emerald-300 bg-emerald-400/20 px-2 py-2 text-xs font-black text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
       >
         配置する
@@ -523,10 +575,17 @@ const SetupPlacementMenu = ({
   </div>
 );
 
-const EventLog = ({ events }: { events: readonly LocalDebugEventLogEntry[] }) => (
+const EventLog = ({
+  events,
+}: {
+  events: readonly LocalDebugEventLogEntry[];
+}) => (
   <details className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
     <summary className="cursor-pointer list-none text-base font-bold text-white focus:outline-none focus:ring-2 focus:ring-cyan-300">
-      最新イベント <span className="text-xs font-normal text-slate-400">({events.length})</span>
+      最新イベント{" "}
+      <span className="text-xs font-normal text-slate-400">
+        ({events.length})
+      </span>
     </summary>
     {events.length === 0 ? (
       <p className="mt-3 text-sm text-slate-400">まだイベントはありません。</p>
@@ -550,19 +609,31 @@ export default function LocalMatchDebugClient({
   viewerOptions,
 }: LocalMatchDebugClientProps) {
   const [data, setData] = useState(initialData);
-  const [selectedUnitId, setSelectedUnitId] = useState<UnitView["unitId"] | null>(null);
+  const [selectedUnitId, setSelectedUnitId] = useState<
+    UnitView["unitId"] | null
+  >(null);
   const [actionMode, setActionMode] = useState<ActionMode>("none");
   const [actionStep, setActionStep] = useState<ActionStep>("idle");
   const [candidates, setCandidates] = useState<readonly BoardCandidate[]>([]);
-  const [selectedDestination, setSelectedDestination] = useState<BoardCandidate | null>(null);
+  const [selectedDestination, setSelectedDestination] =
+    useState<BoardCandidate | null>(null);
   const [nextStance, setNextStance] = useState<Stance>("attack");
-  const [setupSelectedCell, setSetupSelectedCell] = useState<SetupSelectedCell | null>(null);
-  const [setupSelectedUnitId, setSetupSelectedUnitId] = useState<UnitId | null>(null);
-  const [setupSelectedStance, setSetupSelectedStance] = useState<Stance | null>(null);
-  const [setupPlacements, setSetupPlacements] = useState<readonly SetupDraftPlacement[]>([]);
+  const [setupSelectedCell, setSetupSelectedCell] =
+    useState<SetupSelectedCell | null>(null);
+  const [setupSelectedUnitId, setSetupSelectedUnitId] = useState<UnitId | null>(
+    null,
+  );
+  const [setupSelectedStance, setSetupSelectedStance] = useState<Stance | null>(
+    null,
+  );
+  const [setupPlacements, setSetupPlacements] = useState<
+    readonly SetupDraftPlacement[]
+  >([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-  const browserHarnessRef = useRef<ReturnType<typeof createLocalDebugBrowserHarness> | null>(null);
+  const browserHarnessRef = useRef<ReturnType<
+    typeof createLocalDebugBrowserHarness
+  > | null>(null);
 
   const { view } = data;
   const viewerSide = getViewerSide(view);
@@ -575,15 +646,23 @@ export default function LocalMatchDebugClient({
   const currentPlayer = view.players.find(
     (player) => player.id === view.currentTurnPlayerId,
   );
-  const viewerPlayer = view.players.find((player) => player.id === view.viewerId);
+  const viewerPlayer = view.players.find(
+    (player) => player.id === view.viewerId,
+  );
   const isSetupPhase = view.phase === "setup";
   const setupSubmitted = viewerPlayer?.setupSubmitted ?? false;
   const ownSetupUnits = useMemo(
-    () => isSetupPhase ? view.units.filter((unit) => unit.ownerId === view.viewerId) : [],
+    () =>
+      isSetupPhase
+        ? view.units.filter((unit) => unit.ownerId === view.viewerId)
+        : [],
     [isSetupPhase, view.units, view.viewerId],
   );
   const setupPlacementByUnitId = useMemo(
-    () => new Map(setupPlacements.map((placement) => [placement.unitId, placement])),
+    () =>
+      new Map(
+        setupPlacements.map((placement) => [placement.unitId, placement]),
+      ),
     [setupPlacements],
   );
   const setupPlacedUnitIds = useMemo(
@@ -602,24 +681,43 @@ export default function LocalMatchDebugClient({
     () => new Set(data.setup.legalPlacementCoordinates.map(coordinateKey)),
     [data.setup.legalPlacementCoordinates],
   );
-  const winner = view.players.find((player) => player.id === view.winnerPlayerId);
+  const winner = view.players.find(
+    (player) => player.id === view.winnerPlayerId,
+  );
   const isViewerTurn = view.currentTurnPlayerId === view.viewerId;
   const isFinished = view.phase === "finished";
   const canStartTurnAction = !isFinished && isViewerTurn && !isPending;
   const canConcede = view.phase === "active" && !isPending;
   const candidatesByCoordinate = useMemo(
-    () => new Map(candidates.map((candidate) => [coordinateKey(candidate.destination), candidate])),
+    () =>
+      new Map(
+        candidates.map((candidate) => [
+          coordinateKey(candidate.destination),
+          candidate,
+        ]),
+      ),
     [candidates],
   );
-  const boardColumnLabels = boardRows[0]?.cells.map((cell) => cell.coordinate.col) ?? [];
+  const boardColumnLabels =
+    boardRows[0]?.cells.map((cell) => cell.coordinate.col) ?? [];
   const setupPlacementByCoordinate = useMemo(
-    () => new Map(setupPlacements.map((placement) => [coordinateKey(placement.position), placement])),
+    () =>
+      new Map(
+        setupPlacements.map((placement) => [
+          coordinateKey(placement.position),
+          placement,
+        ]),
+      ),
     [setupPlacements],
   );
-  const selectedSetupCoordinateKey = setupSelectedCell === null ? null : coordinateKey(setupSelectedCell.position);
-  const selectedSetupPlacement = selectedSetupCoordinateKey === null
-    ? undefined
-    : setupPlacementByCoordinate.get(selectedSetupCoordinateKey);
+  const selectedSetupCoordinateKey =
+    setupSelectedCell === null
+      ? null
+      : coordinateKey(setupSelectedCell.position);
+  const selectedSetupPlacement =
+    selectedSetupCoordinateKey === null
+      ? undefined
+      : setupPlacementByCoordinate.get(selectedSetupCoordinateKey);
   const firstPlayer = view.players.find((player) => player.side === "south");
   const secondPlayer = view.players.find((player) => player.side === "north");
   const displayPlayers = [firstPlayer, secondPlayer].filter(
@@ -628,8 +726,13 @@ export default function LocalMatchDebugClient({
   const activeSetupSide = isSetupPhase ? viewerSide : currentPlayer?.side;
   const firstPlayerSubmitted = firstPlayer?.setupSubmitted ?? false;
   const secondPlayerSubmitted = secondPlayer?.setupSubmitted ?? false;
-  const setupIsHandoff = isSetupPhase && viewerSide === "south" && firstPlayerSubmitted && !secondPlayerSubmitted;
-  const setupLockedForPlayer2 = isSetupPhase && viewerSide === "north" && !firstPlayerSubmitted;
+  const setupIsHandoff =
+    isSetupPhase &&
+    viewerSide === "south" &&
+    firstPlayerSubmitted &&
+    !secondPlayerSubmitted;
+  const setupLockedForPlayer2 =
+    isSetupPhase && viewerSide === "north" && !firstPlayerSubmitted;
   const flagCoordinateKeys = useMemo(() => {
     const coordinates = view.players.flatMap((player) => {
       const result = getFlagAreaCoordinates({
@@ -667,21 +770,23 @@ export default function LocalMatchDebugClient({
     resetSetupDraft();
   };
 
-
   useEffect(() => {
-    const harness = createLocalDebugBrowserHarness(window.localStorage, getViewerSide(initialData.view));
+    const harness = createLocalDebugBrowserHarness(
+      window.localStorage,
+      getViewerSide(initialData.view),
+    );
     browserHarnessRef.current = harness;
     const response = harness.getView(harness.flow.viewerSide);
 
     queueMicrotask(() => {
       if (!response.ok) {
-        setErrorMessage(response.error.message);
+        setErrorMessage(formatDebugRuleError(response.error));
         return;
       }
 
       applyViewResponse(response.value);
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchBoardCandidates = (unitId: UnitView["unitId"]) => {
@@ -694,22 +799,28 @@ export default function LocalMatchDebugClient({
       }
 
       const moveResponse = harness.getMoveCandidates({ viewerSide, unitId });
-      const flagResponse = harness.getFlagAttackCandidates({ viewerSide, unitId });
+      const flagResponse = harness.getFlagAttackCandidates({
+        viewerSide,
+        unitId,
+      });
 
       if (!moveResponse.ok) {
         resetSelection();
-        setErrorMessage(moveResponse.error.message);
+        setErrorMessage(formatDebugRuleError(moveResponse.error));
         return;
       }
       if (!flagResponse.ok) {
         resetSelection();
-        setErrorMessage(flagResponse.error.message);
+        setErrorMessage(formatDebugRuleError(flagResponse.error));
         return;
       }
 
       setSelectedUnitId(unitId);
       setActionMode("move");
-      setCandidates([...moveResponse.value.candidates, ...flagResponse.value.candidates]);
+      setCandidates([
+        ...moveResponse.value.candidates,
+        ...flagResponse.value.candidates,
+      ]);
       setSelectedDestination(null);
       setActionStep("destination");
     });
@@ -724,17 +835,25 @@ export default function LocalMatchDebugClient({
         return;
       }
 
-      const response = harness.getReserveDeploymentCandidates({ viewerSide, unitId });
+      const response = harness.getReserveDeploymentCandidates({
+        viewerSide,
+        unitId,
+      });
 
       if (!response.ok) {
         resetSelection();
-        setErrorMessage(response.error.message);
+        setErrorMessage(formatDebugRuleError(response.error));
         return;
       }
 
       setSelectedUnitId(unitId);
       setActionMode("deploy");
-      setCandidates(response.value.candidates.map((candidate) => ({ ...candidate, kind: "deploy" })));
+      setCandidates(
+        response.value.candidates.map((candidate) => ({
+          ...candidate,
+          kind: "deploy",
+        })),
+      );
       setSelectedDestination(null);
       setActionStep("destination");
     });
@@ -752,7 +871,7 @@ export default function LocalMatchDebugClient({
       const response = harness.getView(side);
 
       if (!response.ok) {
-        setErrorMessage(response.error.message);
+        setErrorMessage(formatDebugRuleError(response.error));
         return;
       }
 
@@ -761,34 +880,64 @@ export default function LocalMatchDebugClient({
   };
 
   const selectSetupUnit = (unitId: UnitId) => {
-    if (!isSetupPhase || setupSubmitted || isPending || setupSelectedCell === null) return;
+    if (
+      !isSetupPhase ||
+      setupSubmitted ||
+      isPending ||
+      setupSelectedCell === null
+    )
+      return;
     setSetupSelectedUnitId(unitId);
   };
 
   const clearSetupPlacement = (unitId: UnitId) => {
-    setSetupPlacements((previous) => previous.filter((placement) => placement.unitId !== unitId));
+    setSetupPlacements((previous) =>
+      previous.filter((placement) => placement.unitId !== unitId),
+    );
     setSetupSelectedUnitId(unitId);
   };
 
   const placeSetupSelection = () => {
-    if (setupSelectedCell === null || setupSelectedUnitId === null || setupSelectedStance === null || setupSubmitted || isPending) return;
+    if (
+      setupSelectedCell === null ||
+      setupSelectedUnitId === null ||
+      setupSelectedStance === null ||
+      setupSubmitted ||
+      isPending
+    )
+      return;
     const selectedKey = coordinateKey(setupSelectedCell.position);
     if (!setupLegalCoordinateKeys.has(selectedKey)) return;
 
     const existingAtCell = setupPlacementByCoordinate.get(selectedKey);
     const placedElsewhere = setupPlacements.some(
-      (placement) => placement.unitId === setupSelectedUnitId && coordinateKey(placement.position) !== selectedKey,
+      (placement) =>
+        placement.unitId === setupSelectedUnitId &&
+        coordinateKey(placement.position) !== selectedKey,
     );
     if (placedElsewhere) return;
-    if (existingAtCell !== undefined && existingAtCell.unitId !== setupSelectedUnitId) {
-      setSetupPlacements((previous) => previous.filter((placement) => coordinateKey(placement.position) !== selectedKey));
+    if (
+      existingAtCell !== undefined &&
+      existingAtCell.unitId !== setupSelectedUnitId
+    ) {
+      setSetupPlacements((previous) =>
+        previous.filter(
+          (placement) => coordinateKey(placement.position) !== selectedKey,
+        ),
+      );
     }
 
     setSetupPlacements((previous) => [
-      ...previous.filter((placement) =>
-        placement.unitId !== setupSelectedUnitId && coordinateKey(placement.position) !== selectedKey,
+      ...previous.filter(
+        (placement) =>
+          placement.unitId !== setupSelectedUnitId &&
+          coordinateKey(placement.position) !== selectedKey,
       ),
-      { unitId: setupSelectedUnitId, position: setupSelectedCell.position, stance: setupSelectedStance },
+      {
+        unitId: setupSelectedUnitId,
+        position: setupSelectedCell.position,
+        stance: setupSelectedStance,
+      },
     ]);
     resetSetupSelection();
   };
@@ -821,7 +970,7 @@ export default function LocalMatchDebugClient({
       });
 
       if (!response.ok) {
-        setErrorMessage(response.error.message);
+        setErrorMessage(formatDebugRuleError(response.error));
         return;
       }
 
@@ -846,7 +995,7 @@ export default function LocalMatchDebugClient({
         });
 
         if (!response.ok) {
-          setErrorMessage(response.error.message);
+          setErrorMessage(formatDebugRuleError(response.error));
           return;
         }
 
@@ -901,7 +1050,7 @@ export default function LocalMatchDebugClient({
               });
 
       if (!response.ok) {
-        setErrorMessage(response.error.message);
+        setErrorMessage(formatDebugRuleError(response.error));
         return;
       }
 
@@ -921,7 +1070,7 @@ export default function LocalMatchDebugClient({
       const response = harness.reset(viewerSide, fixture);
 
       if (!response.ok) {
-        setErrorMessage(response.error.message);
+        setErrorMessage(formatDebugRuleError(response.error));
         return;
       }
 
@@ -940,7 +1089,7 @@ export default function LocalMatchDebugClient({
 
       const response = harness.clear("south");
       if (!response.ok) {
-        setErrorMessage(response.error.message);
+        setErrorMessage(formatDebugRuleError(response.error));
         return;
       }
 
@@ -966,7 +1115,13 @@ export default function LocalMatchDebugClient({
 
     if (actionStep === "destination" && candidate !== undefined) {
       setSelectedDestination(candidate);
-      setActionMode(candidate.kind === "deploy" ? "deploy" : candidate.kind === "flag_attack" ? "flag_attack" : "move");
+      setActionMode(
+        candidate.kind === "deploy"
+          ? "deploy"
+          : candidate.kind === "flag_attack"
+            ? "flag_attack"
+            : "move",
+      );
       setActionStep("stance");
       return;
     }
@@ -990,7 +1145,8 @@ export default function LocalMatchDebugClient({
       return "CONCEDE_MATCH: この対戦を投了し、相手を勝者にします。";
     }
     if (selectedUnitId === null || selectedDestination === null) {
-      if (!isViewerTurn && view.phase === "active") return "相手の手番です。投了以外の操作はできません。";
+      if (!isViewerTurn && view.phase === "active")
+        return "相手の手番です。投了以外の操作はできません。";
       return "ユニットを選び、強調表示された候補マスをタップしてください。";
     }
 
@@ -1010,16 +1166,30 @@ export default function LocalMatchDebugClient({
                 Local Match
               </h1>
             </div>
-            <div className={`rounded-2xl border px-3 py-2 text-right text-xs font-bold ${isViewerTurn ? "border-emerald-300/60 bg-emerald-400/15 text-emerald-50" : "border-slate-700 bg-slate-900 text-slate-300"}`}>
-              <span className="block text-[0.58rem] uppercase tracking-[0.18em] text-slate-400">Turn</span>
-              {currentPlayer === undefined ? "—" : playerDisplayName(currentPlayer.side)}
+            <div
+              className={`rounded-2xl border px-3 py-2 text-right text-xs font-bold ${isViewerTurn ? "border-emerald-300/60 bg-emerald-400/15 text-emerald-50" : "border-slate-700 bg-slate-900 text-slate-300"}`}
+            >
+              <span className="block text-[0.58rem] uppercase tracking-[0.18em] text-slate-400">
+                Turn
+              </span>
+              {currentPlayer === undefined
+                ? "—"
+                : playerDisplayName(currentPlayer.side)}
             </div>
           </div>
           <div className="mt-3 grid grid-cols-4 gap-1.5 text-center text-[0.66rem] text-slate-300">
-            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">{view.phase}</span>
-            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">T{view.turnNumber}</span>
-            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">v{view.stateVersion}</span>
-            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">{viewerSide}視点</span>
+            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">
+              {view.phase}
+            </span>
+            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">
+              T{view.turnNumber}
+            </span>
+            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">
+              v{view.stateVersion}
+            </span>
+            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">
+              {viewerSide}視点
+            </span>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             {displayPlayers.map((player) => (
@@ -1036,19 +1206,32 @@ export default function LocalMatchDebugClient({
 
         <section className="rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-3 text-xs leading-5 text-cyan-50/90">
           <p className="font-black">ブラウザ内デバッグ保存</p>
-          <p>正式オンライン保存ではありません。この端末だけに保存され、公開URLでもサーバーメモリに依存せず復元します。</p>
+          <p>
+            正式オンライン保存ではありません。この端末だけに保存され、公開URLでもサーバーメモリに依存せず復元します。
+          </p>
         </section>
 
         {view.phase === "finished" ? (
-          <section className="rounded-3xl border border-amber-200/60 bg-amber-400/15 p-4 text-amber-50 shadow-xl shadow-amber-950/30" role="status">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-100/80">Result</p>
-            <h2 className="mt-1 text-2xl font-black">{winner === undefined ? "—" : playerDisplayName(winner.side)} 勝利</h2>
+          <section
+            className="rounded-3xl border border-amber-200/60 bg-amber-400/15 p-4 text-amber-50 shadow-xl shadow-amber-950/30"
+            role="status"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-100/80">
+              Result
+            </p>
+            <h2 className="mt-1 text-2xl font-black">
+              {winner === undefined ? "—" : playerDisplayName(winner.side)} 勝利
+            </h2>
             <p className="mt-2 text-sm">reason: {view.winReason ?? "—"}</p>
           </section>
         ) : null}
 
         <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-3">
-          <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="player view tabs">
+          <div
+            className="grid grid-cols-2 gap-2"
+            role="tablist"
+            aria-label="player view tabs"
+          >
             {viewerOptions.map((option) => {
               const selected = option.side === viewerSide;
               const tabClasses = `min-h-12 rounded-2xl border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300 ${
@@ -1061,7 +1244,9 @@ export default function LocalMatchDebugClient({
                   <span className="block text-[0.6rem] uppercase tracking-[0.2em] text-slate-400">
                     {isSetupPhase ? "setup" : "viewer"}
                   </span>
-                  <span className="mt-0.5 block font-bold">{playerDisplayName(option.side)}</span>
+                  <span className="mt-0.5 block font-bold">
+                    {playerDisplayName(option.side)}
+                  </span>
                 </>
               );
 
@@ -1109,13 +1294,19 @@ export default function LocalMatchDebugClient({
         </section>
 
         {errorMessage !== null ? (
-          <div className="rounded-2xl border border-rose-300/50 bg-rose-500/15 p-3 text-sm font-semibold text-rose-100" role="alert">
+          <div
+            className="rounded-2xl border border-rose-300/50 bg-rose-500/15 p-3 text-sm font-semibold text-rose-100"
+            role="alert"
+          >
             操作できません: {errorMessage}
           </div>
         ) : null}
 
         {isPending ? (
-          <div className="rounded-2xl border border-cyan-300/40 bg-cyan-300/10 p-3 text-sm font-semibold text-cyan-100" role="status">
+          <div
+            className="rounded-2xl border border-cyan-300/40 bg-cyan-300/10 p-3 text-sm font-semibold text-cyan-100"
+            role="status"
+          >
             処理中… ブラウザ内デバッグハーネスで検証しています。
           </div>
         ) : null}
@@ -1124,22 +1315,41 @@ export default function LocalMatchDebugClient({
           <section className="w-full min-w-0 max-w-full overflow-x-hidden rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-3">
             <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
               <div className="min-w-0">
-                <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-cyan-100/70">Setup</p>
+                <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-cyan-100/70">
+                  Setup
+                </p>
                 <h2 className="mt-1 text-lg font-black text-cyan-50">
-                  {playerDisplayName(viewerSide)}設定中 <span className="text-sm font-bold text-cyan-100/80">({playerAreaLabel(viewerSide)})</span>
+                  {playerDisplayName(viewerSide)}設定中{" "}
+                  <span className="text-sm font-bold text-cyan-100/80">
+                    ({playerAreaLabel(viewerSide)})
+                  </span>
                 </h2>
-                <p className="mt-1 text-xs text-cyan-100/80">盤面の配置可能マスを先にタップし、その場所へ置くカードとattack / defenseを選びます。</p>
+                <p className="mt-1 text-xs text-cyan-100/80">
+                  盤面の配置可能マスを先にタップし、その場所へ置くカードとattack
+                  / defenseを選びます。
+                </p>
               </div>
               <div className="grid w-full min-w-0 grid-cols-2 gap-1 text-center text-[0.65rem] font-bold sm:w-auto sm:min-w-28">
-                <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">配置 {setupPlacements.length}/6</span>
-                <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">リザーバー {setupAutoReserveUnits.length}/2</span>
+                <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">
+                  配置 {setupPlacements.length}/6
+                </span>
+                <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">
+                  リザーバー {setupAutoReserveUnits.length}/2
+                </span>
               </div>
             </div>
 
-            <div className="mt-3 grid grid-cols-2 gap-2" role="tablist" aria-label="setup player tabs">
+            <div
+              className="mt-3 grid grid-cols-2 gap-2"
+              role="tablist"
+              aria-label="setup player tabs"
+            >
               {(["south", "north"] as const).map((side) => {
                 const active = side === viewerSide;
-                const submitted = side === "south" ? firstPlayerSubmitted : secondPlayerSubmitted;
+                const submitted =
+                  side === "south"
+                    ? firstPlayerSubmitted
+                    : secondPlayerSubmitted;
                 return (
                   <button
                     key={`setup-tab-${side}`}
@@ -1153,8 +1363,12 @@ export default function LocalMatchDebugClient({
                     role="tab"
                     aria-selected={active}
                   >
-                    <span className="block font-black">{playerDisplayName(side)}</span>
-                    <span className="text-[0.62rem]">{submitted ? "確定済み" : active ? "設定中" : "未完了"}</span>
+                    <span className="block font-black">
+                      {playerDisplayName(side)}
+                    </span>
+                    <span className="text-[0.62rem]">
+                      {submitted ? "確定済み" : active ? "設定中" : "未完了"}
+                    </span>
                   </button>
                 );
               })}
@@ -1162,14 +1376,24 @@ export default function LocalMatchDebugClient({
 
             {setupLockedForPlayer2 ? (
               <div className="mt-4 rounded-3xl border border-slate-700 bg-slate-950/80 p-5 text-center">
-                <h3 className="text-lg font-black text-white">プレイヤー1設定中</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-300">プレイヤー1の確定後、引き渡し画面からプレイヤー2の設定を開始します。</p>
+                <h3 className="text-lg font-black text-white">
+                  プレイヤー1設定中
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  プレイヤー1の確定後、引き渡し画面からプレイヤー2の設定を開始します。
+                </p>
               </div>
             ) : setupIsHandoff ? (
               <div className="mt-4 rounded-3xl border border-emerald-300/40 bg-emerald-400/10 p-5 text-center">
-                <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-emerald-100/70">Handoff</p>
-                <h3 className="mt-2 text-2xl font-black text-emerald-50">プレイヤー1の配置が完了しました</h3>
-                <p className="mt-3 text-sm leading-6 text-emerald-50/85">端末をプレイヤー2へ渡してください。プレイヤー1のカード名、配置、stance、リザーバー内容はこの画面には表示しません。</p>
+                <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-emerald-100/70">
+                  Handoff
+                </p>
+                <h3 className="mt-2 text-2xl font-black text-emerald-50">
+                  プレイヤー1の配置が完了しました
+                </h3>
+                <p className="mt-3 text-sm leading-6 text-emerald-50/85">
+                  端末をプレイヤー2へ渡してください。プレイヤー1のカード名、配置、stance、リザーバー内容はこの画面には表示しません。
+                </p>
                 <button
                   type="button"
                   onClick={() => refreshView("north")}
@@ -1183,10 +1407,16 @@ export default function LocalMatchDebugClient({
               <div className="mt-3 grid gap-2">
                 <div className="grid grid-cols-2 gap-2 text-xs text-slate-200">
                   <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
-                    配置 <strong className="text-white">{setupPlacements.length}/6</strong>
+                    配置{" "}
+                    <strong className="text-white">
+                      {setupPlacements.length}/6
+                    </strong>
                   </span>
                   <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
-                    予備 <strong className="text-white">{setupAutoReserveUnits.length}/2</strong>
+                    予備{" "}
+                    <strong className="text-white">
+                      {setupAutoReserveUnits.length}/2
+                    </strong>
                   </span>
                 </div>
                 <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2 text-xs leading-5 text-slate-300">
@@ -1194,7 +1424,12 @@ export default function LocalMatchDebugClient({
                 </p>
                 <button
                   type="button"
-                  disabled={setupSubmitted || isPending || setupPlacements.length !== 6 || setupAutoReserveUnits.length !== 2}
+                  disabled={
+                    setupSubmitted ||
+                    isPending ||
+                    setupPlacements.length !== 6 ||
+                    setupAutoReserveUnits.length !== 2
+                  }
                   onClick={submitSetupPlacement}
                   className="min-h-11 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-2 text-sm font-black text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -1209,17 +1444,27 @@ export default function LocalMatchDebugClient({
           <div className="mb-2 flex items-center justify-between gap-3 px-1">
             <div>
               <h2 className="text-base font-bold text-white">8×8 Board</h2>
-              <p className="text-[0.68rem] text-slate-400">座標は現在の{viewerSide}視点で反転表示</p>
+              <p className="text-[0.68rem] text-slate-400">
+                座標は現在の{viewerSide}視点で反転表示
+              </p>
             </div>
             <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-1 text-xs text-slate-300">
               {view.boardSize.width}×{view.boardSize.height}
             </span>
           </div>
           <div className="mb-2 grid grid-cols-4 gap-1 text-center text-[0.58rem] font-bold sm:text-[0.68rem]">
-            <span className="rounded-full border border-cyan-300/50 px-1.5 py-1 text-cyan-100">○ 移動</span>
-            <span className="rounded-full border border-rose-300/50 px-1.5 py-1 text-rose-100">⚔ 戦闘</span>
-            <span className="rounded-full border border-emerald-300/50 px-1.5 py-1 text-emerald-100">配 予備</span>
-            <span className="rounded-full border border-amber-200/60 px-1.5 py-1 text-amber-100">旗 攻撃</span>
+            <span className="rounded-full border border-cyan-300/50 px-1.5 py-1 text-cyan-100">
+              ○ 移動
+            </span>
+            <span className="rounded-full border border-rose-300/50 px-1.5 py-1 text-rose-100">
+              ⚔ 戦闘
+            </span>
+            <span className="rounded-full border border-emerald-300/50 px-1.5 py-1 text-emerald-100">
+              配 予備
+            </span>
+            <span className="rounded-full border border-amber-200/60 px-1.5 py-1 text-amber-100">
+              旗 攻撃
+            </span>
           </div>
           <div className="grid grid-cols-[1rem_minmax(0,1fr)] gap-1 sm:grid-cols-[1.25rem_minmax(0,1fr)]">
             <div aria-hidden="true" />
@@ -1230,81 +1475,126 @@ export default function LocalMatchDebugClient({
             </div>
             {boardRows.map((row, rowDisplayIndex) => (
               <div key={`row-${row.rowIndex}`} className="contents">
-                <div className="flex items-center justify-center text-[0.55rem] font-bold text-slate-500">r{row.rowIndex}</div>
-                <div className="grid w-full grid-cols-8 gap-1" aria-label="8 by 8 local debug board">
+                <div className="flex items-center justify-center text-[0.55rem] font-bold text-slate-500">
+                  r{row.rowIndex}
+                </div>
+                <div
+                  className="grid w-full grid-cols-8 gap-1"
+                  aria-label="8 by 8 local debug board"
+                >
                   {row.cells.map((cell, cellDisplayIndex) => {
-                    const setupDraft = setupPlacements.find((placement) => coordinateKey(placement.position) === coordinateKey(cell.coordinate));
-                    const setupDraftUnit = setupDraft === undefined ? null : ownSetupUnits.find((unit) => unit.unitId === setupDraft.unitId) ?? null;
+                    const setupDraft = setupPlacements.find(
+                      (placement) =>
+                        coordinateKey(placement.position) ===
+                        coordinateKey(cell.coordinate),
+                    );
+                    const setupDraftUnit =
+                      setupDraft === undefined
+                        ? null
+                        : (ownSetupUnits.find(
+                            (unit) => unit.unitId === setupDraft.unitId,
+                          ) ?? null);
                     const unit = isSetupPhase ? setupDraftUnit : cell.unit;
                     const coordinate = coordinateKey(cell.coordinate);
                     const isFlagCell = flagCoordinateKeys.has(coordinate);
-                    const setupLegal = isSetupPhase && !setupSubmitted && !setupLockedForPlayer2 && setupLegalCoordinateKeys.has(coordinate);
-                    const setupCellSelected = selectedSetupCoordinateKey === coordinate;
+                    const setupLegal =
+                      isSetupPhase &&
+                      !setupSubmitted &&
+                      !setupLockedForPlayer2 &&
+                      setupLegalCoordinateKeys.has(coordinate);
+                    const setupCellSelected =
+                      selectedSetupCoordinateKey === coordinate;
                     const showSetupMenu = setupCellSelected && setupLegal;
-                    const popoverHorizontalClass = cellDisplayIndex <= 2 ? "left-0" : cellDisplayIndex >= 5 ? "right-0" : "left-1/2 -translate-x-1/2";
-                    const popoverVerticalClass = rowDisplayIndex >= 4 ? "bottom-[calc(100%+0.35rem)]" : "top-[calc(100%+0.35rem)]";
-                    const selected = unit?.unitId === selectedUnitId || setupCellSelected;
+                    const popoverHorizontalClass =
+                      cellDisplayIndex <= 2
+                        ? "left-0"
+                        : cellDisplayIndex >= 5
+                          ? "right-0"
+                          : "left-1/2 -translate-x-1/2";
+                    const popoverVerticalClass =
+                      rowDisplayIndex >= 4
+                        ? "bottom-[calc(100%+0.35rem)]"
+                        : "top-[calc(100%+0.35rem)]";
+                    const selected =
+                      unit?.unitId === selectedUnitId || setupCellSelected;
                     const candidate = candidatesByCoordinate.get(coordinate);
-                    const destinationSelected = selectedDestination !== null && coordinateKey(selectedDestination.destination) === coordinate;
+                    const destinationSelected =
+                      selectedDestination !== null &&
+                      coordinateKey(selectedDestination.destination) ===
+                        coordinate;
                     const cellLabel = `${toCoordinateLabel(cell.coordinate)}${isFlagCell ? " 旗 配置不可" : ""}${candidate === undefined ? "" : ` ${candidateLabel(candidate)}`}${unit === null ? " empty" : ` ${isOwnUnit(view, unit) ? "own" : "enemy"} ${unit.revealed ? "revealed" : "hidden"}`}`;
                     return (
                       <div key={coordinate} className="relative min-w-0">
-                      <button
-                        type="button"
-                        onClick={() => handleCellClick(unit, cell.coordinate)}
-                        disabled={isFinished}
-                        className={`relative aspect-square w-full min-w-0 rounded-lg border p-0.5 text-[0.55rem] shadow-lg transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-70 sm:rounded-xl ${
-                          destinationSelected || setupCellSelected
-                            ? "border-white bg-white/20 ring-2 ring-white"
-                            : selected
-                              ? "border-white bg-white/10 ring-2 ring-white/80"
-                              : setupLegal
-                                ? "border-cyan-200 bg-cyan-400/15 ring-1 ring-cyan-200/60"
-                                : isFlagCell
-                                  ? "border-amber-200/70 bg-amber-400/15 text-amber-50"
-                                  : candidateClasses(candidate)
-                        }`}
-                        aria-label={cellLabel}
-                      >
-                        <span className="absolute left-1 top-0.5 z-10 rounded bg-slate-950/70 px-0.5 text-[0.48rem] font-bold text-slate-400">
-                          {cell.coordinate.row},{cell.coordinate.col}
-                        </span>
-                        {candidate !== undefined ? (
-                          <span className={`absolute right-0.5 top-0.5 z-20 rounded-full border px-1 text-[0.55rem] font-black ${candidateToneClasses[candidate.kind]}`}>
-                            {candidateMarker(candidate)}
+                        <button
+                          type="button"
+                          onClick={() => handleCellClick(unit, cell.coordinate)}
+                          disabled={isFinished}
+                          className={`relative aspect-square w-full min-w-0 rounded-lg border p-0.5 text-[0.55rem] shadow-lg transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-70 sm:rounded-xl ${
+                            destinationSelected || setupCellSelected
+                              ? "border-white bg-white/20 ring-2 ring-white"
+                              : selected
+                                ? "border-white bg-white/10 ring-2 ring-white/80"
+                                : setupLegal
+                                  ? "border-cyan-200 bg-cyan-400/15 ring-1 ring-cyan-200/60"
+                                  : isFlagCell
+                                    ? "border-amber-200/70 bg-amber-400/15 text-amber-50"
+                                    : candidateClasses(candidate)
+                          }`}
+                          aria-label={cellLabel}
+                        >
+                          <span className="absolute left-1 top-0.5 z-10 rounded bg-slate-950/70 px-0.5 text-[0.48rem] font-bold text-slate-400">
+                            {cell.coordinate.row},{cell.coordinate.col}
                           </span>
+                          {candidate !== undefined ? (
+                            <span
+                              className={`absolute right-0.5 top-0.5 z-20 rounded-full border px-1 text-[0.55rem] font-black ${candidateToneClasses[candidate.kind]}`}
+                            >
+                              {candidateMarker(candidate)}
+                            </span>
+                          ) : null}
+                          {setupLegal ? (
+                            <span className="absolute right-0.5 top-0.5 z-20 rounded-full border border-cyan-200 bg-cyan-400/25 px-1 text-[0.55rem] font-black text-cyan-50">
+                              初
+                            </span>
+                          ) : null}
+                          {isFlagCell ? (
+                            <span className="absolute inset-x-1 bottom-0.5 z-10 rounded border border-amber-200/60 bg-amber-400/20 px-0.5 text-center text-[0.5rem] font-black text-amber-50">
+                              ⚑旗
+                            </span>
+                          ) : null}
+                          {unit === null ? (
+                            <span className="flex h-full items-center justify-center text-[0.6rem] text-slate-700">
+                              ·
+                            </span>
+                          ) : (
+                            <UnitPill
+                              view={view}
+                              unit={unit}
+                              selected={selected}
+                            />
+                          )}
+                        </button>
+                        {showSetupMenu ? (
+                          <div
+                            className={`absolute ${popoverHorizontalClass} ${popoverVerticalClass} z-50 w-64 max-w-[calc(100vw-1.5rem)]`}
+                          >
+                            <SetupPlacementMenu
+                              coordinate={cell.coordinate}
+                              units={ownSetupUnits}
+                              placementByUnitId={setupPlacementByUnitId}
+                              selectedCoordinateKey={coordinate}
+                              selectedUnitId={setupSelectedUnitId}
+                              selectedStance={setupSelectedStance}
+                              selectedPlacement={selectedSetupPlacement}
+                              isPending={isPending}
+                              onSelectUnit={selectSetupUnit}
+                              onSelectStance={setSetupSelectedStance}
+                              onPlace={placeSetupSelection}
+                              onClear={clearSelectedSetupPlacement}
+                              onCancel={resetSetupSelection}
+                            />
+                          </div>
                         ) : null}
-                        {setupLegal ? (
-                          <span className="absolute right-0.5 top-0.5 z-20 rounded-full border border-cyan-200 bg-cyan-400/25 px-1 text-[0.55rem] font-black text-cyan-50">初</span>
-                        ) : null}
-                        {isFlagCell ? (
-                          <span className="absolute inset-x-1 bottom-0.5 z-10 rounded border border-amber-200/60 bg-amber-400/20 px-0.5 text-center text-[0.5rem] font-black text-amber-50">⚑旗</span>
-                        ) : null}
-                        {unit === null ? (
-                          <span className="flex h-full items-center justify-center text-[0.6rem] text-slate-700">·</span>
-                        ) : (
-                          <UnitPill view={view} unit={unit} selected={selected} />
-                        )}
-                      </button>
-                      {showSetupMenu ? (
-                        <div className={`absolute ${popoverHorizontalClass} ${popoverVerticalClass} z-50 w-64 max-w-[calc(100vw-1.5rem)]`}>
-                          <SetupPlacementMenu
-                            coordinate={cell.coordinate}
-                            units={ownSetupUnits}
-                            placementByUnitId={setupPlacementByUnitId}
-                            selectedCoordinateKey={coordinate}
-                            selectedUnitId={setupSelectedUnitId}
-                            selectedStance={setupSelectedStance}
-                            selectedPlacement={selectedSetupPlacement}
-                            isPending={isPending}
-                            onSelectUnit={selectSetupUnit}
-                            onSelectStance={setSetupSelectedStance}
-                            onPlace={placeSetupSelection}
-                            onClear={clearSelectedSetupPlacement}
-                            onCancel={resetSetupSelection}
-                          />
-                        </div>
-                      ) : null}
                       </div>
                     );
                   })}
@@ -1316,75 +1606,99 @@ export default function LocalMatchDebugClient({
 
         {!isSetupPhase ? (
           <section className="rounded-3xl border border-slate-800 bg-slate-900/95 p-3 shadow-2xl shadow-black/30 sm:p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-base font-bold text-white">主要操作</h2>
-            <span className={`rounded-full border px-3 py-1 text-xs font-bold ${isViewerTurn ? "border-emerald-300/60 bg-emerald-400/15 text-emerald-50" : "border-slate-700 bg-slate-950 text-slate-400"}`}>
-              {isViewerTurn ? "自分の手番" : "操作制限中"}
-            </span>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-300">
-            <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">操作: <span className="font-bold text-white">{selectedActionLabel(actionMode)}</span></p>
-            <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">選択: <span className="font-bold text-white">{selectedUnitId === null ? "—" : compactId(selectedUnitId)}</span></p>
-            <p className="col-span-2 rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
-              候補: ○{countCandidates(candidates, "move")} / ⚔{countCandidates(candidates, "engage")} / 配{countCandidates(candidates, "deploy")} / 旗{countCandidates(candidates, "flag_attack")}
-            </p>
-            <p className="col-span-2 rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
-              対象: {selectedDestination === null ? "—" : `${toCoordinateLabel(selectedDestination.destination)} (${candidateLabel(selectedDestination)})`}
-            </p>
-          </div>
-
-          {actionStep === "stance" || actionStep === "confirm" ? (
-            <div className="mt-4 grid gap-2">
-              <p className="text-xs font-bold text-slate-300">実行後の表示形式</p>
-              <div className="grid grid-cols-2 gap-2">
-                {(["attack", "defense"] as const).map((stance) => (
-                  <button
-                    key={stance}
-                    type="button"
-                    onClick={() => {
-                      setNextStance(stance);
-                      setActionStep("confirm");
-                    }}
-                    className={`min-h-14 rounded-2xl border px-3 py-3 text-sm font-black ${
-                      nextStance === stance
-                        ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/70"
-                        : "border-slate-700 bg-slate-950 text-slate-300"
-                    }`}
-                    aria-label={`choose ${stance} stance`}
-                  >
-                    <span className="block text-lg">{stanceLabel(stance)}</span>
-                    {stanceFullLabel(stance)}
-                  </button>
-                ))}
-              </div>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-bold text-white">主要操作</h2>
+              <span
+                className={`rounded-full border px-3 py-1 text-xs font-bold ${isViewerTurn ? "border-emerald-300/60 bg-emerald-400/15 text-emerald-50" : "border-slate-700 bg-slate-950 text-slate-400"}`}
+              >
+                {isViewerTurn ? "自分の手番" : "操作制限中"}
+              </span>
             </div>
-          ) : null}
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-300">
+              <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
+                操作:{" "}
+                <span className="font-bold text-white">
+                  {selectedActionLabel(actionMode)}
+                </span>
+              </p>
+              <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
+                選択:{" "}
+                <span className="font-bold text-white">
+                  {selectedUnitId === null ? "—" : compactId(selectedUnitId)}
+                </span>
+              </p>
+              <p className="col-span-2 rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
+                候補: ○{countCandidates(candidates, "move")} / ⚔
+                {countCandidates(candidates, "engage")} / 配
+                {countCandidates(candidates, "deploy")} / 旗
+                {countCandidates(candidates, "flag_attack")}
+              </p>
+              <p className="col-span-2 rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
+                対象:{" "}
+                {selectedDestination === null
+                  ? "—"
+                  : `${toCoordinateLabel(selectedDestination.destination)} (${candidateLabel(selectedDestination)})`}
+              </p>
+            </div>
 
-          <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/70 p-3 text-xs leading-5 text-slate-300">
-            {confirmationText()}
-          </div>
+            {actionStep === "stance" || actionStep === "confirm" ? (
+              <div className="mt-4 grid gap-2">
+                <p className="text-xs font-bold text-slate-300">
+                  実行後の表示形式
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["attack", "defense"] as const).map((stance) => (
+                    <button
+                      key={stance}
+                      type="button"
+                      onClick={() => {
+                        setNextStance(stance);
+                        setActionStep("confirm");
+                      }}
+                      className={`min-h-14 rounded-2xl border px-3 py-3 text-sm font-black ${
+                        nextStance === stance
+                          ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/70"
+                          : "border-slate-700 bg-slate-950 text-slate-300"
+                      }`}
+                      aria-label={`choose ${stance} stance`}
+                    >
+                      <span className="block text-lg">
+                        {stanceLabel(stance)}
+                      </span>
+                      {stanceFullLabel(stance)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={resetSelection}
-              className="min-h-12 rounded-2xl border border-slate-600 bg-slate-950 px-3 py-3 text-sm font-bold text-slate-200"
-            >
-              キャンセル
-            </button>
-            <button
-              type="button"
-              onClick={submitSelectedAction}
-              disabled={
-                isPending ||
-                (actionMode !== "concede" &&
-                  (selectedUnitId === null || selectedDestination === null || actionStep !== "confirm"))
-              }
-              className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              確認して実行
-            </button>
-          </div>
+            <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/70 p-3 text-xs leading-5 text-slate-300">
+              {confirmationText()}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={resetSelection}
+                className="min-h-12 rounded-2xl border border-slate-600 bg-slate-950 px-3 py-3 text-sm font-bold text-slate-200"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={submitSelectedAction}
+                disabled={
+                  isPending ||
+                  (actionMode !== "concede" &&
+                    (selectedUnitId === null ||
+                      selectedDestination === null ||
+                      actionStep !== "confirm"))
+                }
+                className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                確認して実行
+              </button>
+            </div>
           </section>
         ) : null}
 
@@ -1392,7 +1706,11 @@ export default function LocalMatchDebugClient({
           <section className="grid gap-3 lg:grid-cols-2">
             {displayPlayers.map((player) => (
               <div key={player.id} className="grid gap-3">
-                <FlagPanel view={view} player={player} active={isSetupPhase && player.side === activeSetupSide} />
+                <FlagPanel
+                  view={view}
+                  player={player}
+                  active={isSetupPhase && player.side === activeSetupSide}
+                />
                 <ReservePanel
                   view={view}
                   player={player}
@@ -1409,32 +1727,32 @@ export default function LocalMatchDebugClient({
 
         {!isSetupPhase ? (
           <section className="rounded-3xl border border-rose-300/30 bg-rose-500/10 p-4">
-          <h2 className="text-base font-bold text-rose-50">危険操作</h2>
-          <p className="mt-2 text-xs leading-5 text-rose-100/80">
-            投了・リセットは確認用ボタンを分けています。activeフェーズなら自分の手番以外でもCONCEDE_MATCHを送信できます。
-          </p>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              disabled={!canConcede}
-              onClick={() => {
-                resetSelection();
-                setActionMode("concede");
-                setActionStep("confirm");
-              }}
-              className="min-h-12 rounded-2xl border border-rose-300/60 bg-rose-400/15 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              投了確認
-            </button>
-            <button
-              type="button"
-              disabled={actionMode !== "concede" || isPending}
-              onClick={submitSelectedAction}
-              className="min-h-12 rounded-2xl border border-rose-200 bg-rose-500/25 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              投了実行
-            </button>
-          </div>
+            <h2 className="text-base font-bold text-rose-50">危険操作</h2>
+            <p className="mt-2 text-xs leading-5 text-rose-100/80">
+              投了・リセットは確認用ボタンを分けています。activeフェーズなら自分の手番以外でもCONCEDE_MATCHを送信できます。
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={!canConcede}
+                onClick={() => {
+                  resetSelection();
+                  setActionMode("concede");
+                  setActionStep("confirm");
+                }}
+                className="min-h-12 rounded-2xl border border-rose-300/60 bg-rose-400/15 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                投了確認
+              </button>
+              <button
+                type="button"
+                disabled={actionMode !== "concede" || isPending}
+                onClick={submitSelectedAction}
+                className="min-h-12 rounded-2xl border border-rose-200 bg-rose-500/25 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                投了実行
+              </button>
+            </div>
           </section>
         ) : null}
 
@@ -1444,7 +1762,9 @@ export default function LocalMatchDebugClient({
           <summary className="cursor-pointer list-none text-base font-bold text-white focus:outline-none focus:ring-2 focus:ring-cyan-300">
             リセット / 詳細
           </summary>
-          <p className="mt-3 text-xs leading-5 text-slate-400">{data.stateStorageNote}</p>
+          <p className="mt-3 text-xs leading-5 text-slate-400">
+            {data.stateStorageNote}
+          </p>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
               type="button"
