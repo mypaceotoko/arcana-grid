@@ -59,6 +59,32 @@ beforeEach(() => {
   unsafeSetFirstPlayerRandomSourceForTests(() => 0);
 });
 
+
+describe("local debug match safe views", () => {
+  it("keeps active hidden opponent board positions public without card details", () => {
+    const response = unwrap(getLocalDebugMatchView("south"));
+    const hidden = response.view.units.find((unit) => unit.unitId === northHiddenShade);
+
+    expect(hidden).toMatchObject({
+      revealed: false,
+      status: "board",
+      position: { row: 1, col: 2 },
+    });
+    expect(JSON.stringify(hidden)).not.toContain("North Hidden Shade");
+    expect(JSON.stringify(hidden)).not.toContain("baseAttack");
+  });
+
+  it("keeps setup opponent units out of the safe view", () => {
+    unwrap(resetLocalDebugMatch("south", "setup"));
+    const response = unwrap(getLocalDebugMatchView("south"));
+
+    expect(response.view.phase).toBe("setup");
+    expect(
+      response.view.units.some((unit) => unit.ownerId === LOCAL_DEBUG_MATCH_PLAYER_IDS.north),
+    ).toBe(false);
+  });
+});
+
 describe("local debug match harness move candidates", () => {
   it("allows candidates only for the current viewer's board units", () => {
     const ownBoard = unwrap(

@@ -1,13 +1,13 @@
 # ARCANA GRID Current Status
 
-最終更新: 2026-06-11
+最終更新: 2026-06-12
 
 ## 確認したリポジトリ状態
 
-- ブランチ: `task-7b-local-move-interaction`
-- 作業開始時のローカルHEAD: `1a3131f`（Task 7Aのローカル対戦デバッグ盤面UI実装を含む履歴）
+- ブランチ: `task-7e-mobile-ui-ux`
+- 作業開始時のローカルHEAD: `b6ad431`（Task 7A〜7Dのローカル対戦UI・ハーネス実装を含む履歴）
 - ローカルには `origin` remote と `main` ブランチが存在しなかったため、ネットワーク経由の最新main確認はできなかった。
-- `AGENTS.md`、`README.md`、`docs/`、Task 7Aの `/debug/local-match`、既存ゲームエンジンとテストを確認してから実装した。
+- `AGENTS.md`、`docs/`、Task 7A〜7Dの `/debug/local-match` ローカル対戦UI・ハーネス、既存ゲームエンジンとテストを確認してから実装した。
 
 ## 実装済み機能
 
@@ -32,21 +32,22 @@
 - setup fixtureからの初期配置UI、6体配置、2体リザーバー指定、attack/defense選択、SUBMIT_INITIAL_PLACEMENT送信。
 - 両者提出後のデバッグハーネス内first player決定、`startTacticalDuelMatch`実行、MATCH_STARTEDイベント表示、activeフェーズ接続。
 - 現在viewerの自分の盤面ユニット選択、サーバー側合法移動候補取得、通常移動/戦闘候補の区別表示、attack/defense選択、MOVE_UNIT実行、DEPLOY_RESERVE、ATTACK_FLAG、CONCEDE_MATCH、イベントログ、setup/active fixtureリセット。
+- Task 7E: iPhone縦画面を優先した `/debug/local-match` のモバイルUI・UX改善。上部のコンパクトな対戦ステータス、横スクロールしない8×8盤面、座標表示、候補種別バッジ、旗ダメージメーター、押しやすいattack/defense選択、折りたたみイベントログ/リセット詳細、finished結果パネルを追加。active中の相手伏せカードは位置・裏面だけを安全に表示し、カード名や数値は渡さない。
 
 ## テスト状況
 
-- 最新確認時点のVitest結果: 20 test files / 338 tests passed。
+- 最新確認時点のVitest結果: 20 test files / 352 tests passed。
 - 既存テストは `src/lib/project.test.ts`、`tests/unit/game/**/*.test.ts`、`tests/unit/debug/**/*.test.ts` にある。
 - 今回の最終確認で以下を実行済み。
   - `npm run typecheck`
   - `npm run lint`（既存の `tests/unit/game/types.test.ts` にwarning 1件あり）
   - `npm run test`
   - `npm run build`
-- 開発サーバーで `/debug/local-match?viewer=south`、状態取得、移動候補取得、MOVE_UNIT、リセット、HTML/JSONの未公開カード詳細混入なしをcurlで確認済み。
+- 開発サーバーで `/debug/local-match?viewer=south`、`?viewer=north`、状態取得、移動候補取得、旗攻撃候補取得、リザーバー候補取得、setup/activeリセット、HTML/JSONの未公開カード詳細混入なしをcurlで確認済み。
 
 ## 現在の次タスク
 
-- 次タスク: Task 7E以降のローカル対戦UI拡張またはオンライン対戦基盤。
+- 次タスク: Task 7Fのローカル対戦UI品質確認、またはオンライン対戦基盤。
 - 今回未実装: 戦闘アニメーション、カード画像の本格導入、Supabase/Auth/Database/Realtime/オンライン対戦。
 
 ## 未実装項目
