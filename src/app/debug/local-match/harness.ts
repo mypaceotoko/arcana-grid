@@ -178,29 +178,40 @@ const cloneCoordinate = (coordinate: Coordinate): Coordinate => ({
 const getViewerId = (viewerSide: PlayerSide): MatchPlayerId =>
   LOCAL_DEBUG_MATCH_PLAYER_IDS[viewerSide] ?? toMatchPlayerId("");
 
-const sanitizePlayerMatchView = (view: PlayerMatchView): PlayerMatchView => ({
-  ...view,
-  players: view.players.map((player) =>
-    player.id === view.viewerId
-      ? { ...player, reserveUnitIds: [...player.reserveUnitIds], flag: { ...player.flag } }
-      : { ...player, reserveUnitIds: [], flag: { ...player.flag } },
-  ),
-  units: view.units
-    .filter((unit) => unit.ownerId === view.viewerId || unit.revealed || view.phase !== "setup")
-    .map((unit) => {
-      if (unit.ownerId === view.viewerId || unit.revealed) {
-        return unit.revealed
-          ? { ...unit, position: unit.position === null ? null : cloneCoordinate(unit.position), card: { ...unit.card, abilityData: { ...unit.card.abilityData } } }
-          : { ...unit, position: unit.position === null ? null : cloneCoordinate(unit.position) };
-      }
+const sanitizePlayerMatchView = (view: PlayerMatchView): PlayerMatchView => {
+  const viewerPlayer = view.players.find((player) => player.id === view.viewerId);
+  const hideSubmittedSetupDetails = view.phase === "setup" && viewerPlayer?.setupSubmitted === true;
 
+  return {
+    ...view,
+    players: view.players.map((player) => {
+      const hideReserveIds = player.id !== view.viewerId || (hideSubmittedSetupDetails && player.id === view.viewerId);
       return {
-        ...unit,
-        position: unit.position === null ? null : cloneCoordinate(unit.position),
-        status: view.phase === "setup" ? "reserve" : unit.status,
+        ...player,
+        reserveUnitIds: hideReserveIds ? [] : [...player.reserveUnitIds],
+        flag: { ...player.flag },
       };
     }),
-});
+    units: view.units
+      .filter((unit) => {
+        if (hideSubmittedSetupDetails && unit.ownerId === view.viewerId) return false;
+        return unit.ownerId === view.viewerId || unit.revealed || view.phase !== "setup";
+      })
+      .map((unit) => {
+        if (unit.ownerId === view.viewerId || unit.revealed) {
+          return unit.revealed
+            ? { ...unit, position: unit.position === null ? null : cloneCoordinate(unit.position), card: { ...unit.card, abilityData: { ...unit.card.abilityData } } }
+            : { ...unit, position: unit.position === null ? null : cloneCoordinate(unit.position) };
+        }
+
+        return {
+          ...unit,
+          position: unit.position === null ? null : cloneCoordinate(unit.position),
+          status: view.phase === "setup" ? "reserve" : unit.status,
+        };
+      }),
+  };
+};
 
 const buildSafeView = (
   state: MatchState,
@@ -789,6 +800,20 @@ export const submitLocalDebugInitialPlacement = (
   const store = getGlobalStore();
   const actor = assertViewerInAnyMatch(store.state, input.viewerSide);
   if (!actor.ok) return actor;
+
+  if (store.state.phase === "setup" && input.viewerSide === "north") {
+    const southPlayer = store.state.players.find((player) => player.side === "south");
+    if (southPlayer?.setupSubmitted !== true) {
+      return {
+        ok: false,
+        error: makeRuleError(
+          "INVALID_ACTION",
+          "Player 1 must submit initial placement before Player 2 starts setup.",
+          { requiredSide: "south", requestedSide: input.viewerSide },
+        ),
+      };
+    }
+  }
 
   const result = applyTacticalDuelAction({
     state: store.state,

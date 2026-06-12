@@ -44,6 +44,7 @@ type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 
 type ActionMode = "none" | "move" | "deploy" | "flag_attack" | "concede";
 type SetupDraftPlacement = { unitId: string; position: Coordinate; stance: Stance };
+type SetupSelectedCell = { position: Coordinate };
 type ActionStep = "idle" | "destination" | "stance" | "confirm";
 type BoardCandidate =
   | LocalDebugMoveCandidate
@@ -163,8 +164,14 @@ const selectedActionLabel = (actionMode: ActionMode): string => {
   }
 };
 
+const playerDisplayName = (side: PlayerSide): string =>
+  side === "south" ? "プレイヤー1" : "プレイヤー2";
+
+const playerAreaLabel = (side: PlayerSide): string =>
+  side === "south" ? "自陣" : "相手陣";
+
 const formatPlayerLabel = (view: PlayerMatchView, player: MatchPlayerState): string =>
-  `${player.side}${player.id === view.viewerId ? " / 自分" : " / 相手"}`;
+  `${playerDisplayName(player.side)}${player.id === view.viewerId ? " / 自分" : " / 相手"}`;
 
 const UnitPill = ({
   view,
@@ -414,9 +421,10 @@ export default function LocalMatchDebugClient({
   const [candidates, setCandidates] = useState<readonly BoardCandidate[]>([]);
   const [selectedDestination, setSelectedDestination] = useState<BoardCandidate | null>(null);
   const [nextStance, setNextStance] = useState<Stance>("attack");
+  const [setupSelectedCell, setSetupSelectedCell] = useState<SetupSelectedCell | null>(null);
   const [setupSelectedUnitId, setSetupSelectedUnitId] = useState<string | null>(null);
+  const [setupSelectedStance, setSetupSelectedStance] = useState<Stance>("attack");
   const [setupPlacements, setSetupPlacements] = useState<readonly SetupDraftPlacement[]>([]);
-  const [setupReserveUnitIds, setSetupReserveUnitIds] = useState<readonly string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -432,28 +440,31 @@ export default function LocalMatchDebugClient({
     (player) => player.id === view.currentTurnPlayerId,
   );
   const viewerPlayer = view.players.find((player) => player.id === view.viewerId);
-  const opponentPlayer = view.players.find((player) => player.id !== view.viewerId);
   const isSetupPhase = view.phase === "setup";
   const setupSubmitted = viewerPlayer?.setupSubmitted ?? false;
-  const opponentSetupSubmitted = opponentPlayer?.setupSubmitted ?? false;
-  const ownSetupUnits = isSetupPhase
-    ? view.units.filter((unit) => unit.ownerId === view.viewerId)
-    : [];
+  const ownSetupUnits = useMemo(
+    () => isSetupPhase ? view.units.filter((unit) => unit.ownerId === view.viewerId) : [],
+    [isSetupPhase, view.units, view.viewerId],
+  );
   const setupPlacementByUnitId = useMemo(
     () => new Map(setupPlacements.map((placement) => [placement.unitId, placement])),
     [setupPlacements],
   );
-  const setupReserveIdSet = useMemo(
-    () => new Set(setupReserveUnitIds),
-    [setupReserveUnitIds],
+  const setupPlacedUnitIds = useMemo(
+    () => new Set(setupPlacements.map((placement) => placement.unitId)),
+    [setupPlacements],
+  );
+  const setupAutoReserveUnits = useMemo(
+    () => ownSetupUnits.filter((unit) => !setupPlacedUnitIds.has(unit.unitId)),
+    [ownSetupUnits, setupPlacedUnitIds],
+  );
+  const setupAutoReserveUnitIds = useMemo(
+    () => setupAutoReserveUnits.map((unit) => unit.unitId),
+    [setupAutoReserveUnits],
   );
   const setupLegalCoordinateKeys = useMemo(
     () => new Set(data.setup.legalPlacementCoordinates.map(coordinateKey)),
     [data.setup.legalPlacementCoordinates],
-  );
-  const setupOccupiedCoordinateKeys = useMemo(
-    () => new Set(setupPlacements.map((placement) => coordinateKey(placement.position))),
-    [setupPlacements],
   );
   const winner = view.players.find((player) => player.id === view.winnerPlayerId);
   const isViewerTurn = view.currentTurnPlayerId === view.viewerId;
@@ -465,9 +476,23 @@ export default function LocalMatchDebugClient({
     [candidates],
   );
   const boardColumnLabels = boardRows[0]?.cells.map((cell) => cell.coordinate.col) ?? [];
+  const setupPlacementByCoordinate = useMemo(
+    () => new Map(setupPlacements.map((placement) => [coordinateKey(placement.position), placement])),
+    [setupPlacements],
+  );
+  const selectedSetupCoordinateKey = setupSelectedCell === null ? null : coordinateKey(setupSelectedCell.position);
+  const selectedSetupPlacement = selectedSetupCoordinateKey === null
+    ? undefined
+    : setupPlacementByCoordinate.get(selectedSetupCoordinateKey);
   const selectedSetupUnit = setupSelectedUnitId === null
     ? null
     : ownSetupUnits.find((unit) => unit.unitId === setupSelectedUnitId) ?? null;
+  const firstPlayer = view.players.find((player) => player.side === "south");
+  const secondPlayer = view.players.find((player) => player.side === "north");
+  const firstPlayerSubmitted = firstPlayer?.setupSubmitted ?? false;
+  const secondPlayerSubmitted = secondPlayer?.setupSubmitted ?? false;
+  const setupIsHandoff = isSetupPhase && viewerSide === "south" && firstPlayerSubmitted && !secondPlayerSubmitted;
+  const setupLockedForPlayer2 = isSetupPhase && viewerSide === "north" && !firstPlayerSubmitted;
 
   const resetSelection = () => {
     setSelectedUnitId(null);
@@ -478,10 +503,15 @@ export default function LocalMatchDebugClient({
     setNextStance("attack");
   };
 
-  const resetSetupDraft = () => {
+  const resetSetupSelection = () => {
+    setSetupSelectedCell(null);
     setSetupSelectedUnitId(null);
+    setSetupSelectedStance("attack");
+  };
+
+  const resetSetupDraft = () => {
+    resetSetupSelection();
     setSetupPlacements([]);
-    setSetupReserveUnitIds([]);
   };
 
   const applyViewResponse = (nextData: LocalDebugViewResponse) => {
@@ -570,33 +600,40 @@ export default function LocalMatchDebugClient({
   };
 
   const selectSetupUnit = (unitId: string) => {
-    if (!isSetupPhase || setupSubmitted || isPending) return;
+    if (!isSetupPhase || setupSubmitted || isPending || setupSelectedCell === null) return;
     setSetupSelectedUnitId(unitId);
-  };
-
-  const toggleSetupReserve = (unitId: string) => {
-    if (!isSetupPhase || setupSubmitted || isPending) return;
-    setSetupReserveUnitIds((previous) => {
-      const exists = previous.includes(unitId);
-      if (exists) return previous.filter((id) => id !== unitId);
-      if (previous.length >= 2) return previous;
-      return [...previous, unitId];
-    });
-    setSetupPlacements((previous) => previous.filter((placement) => placement.unitId !== unitId));
-    setSetupSelectedUnitId(unitId);
-  };
-
-  const updateSetupStance = (unitId: string, stance: Stance) => {
-    setSetupPlacements((previous) =>
-      previous.map((placement) =>
-        placement.unitId === unitId ? { ...placement, stance } : placement,
-      ),
-    );
   };
 
   const clearSetupPlacement = (unitId: string) => {
     setSetupPlacements((previous) => previous.filter((placement) => placement.unitId !== unitId));
     setSetupSelectedUnitId(unitId);
+  };
+
+  const placeSetupSelection = () => {
+    if (setupSelectedCell === null || setupSelectedUnitId === null || setupSubmitted || isPending) return;
+    const selectedKey = coordinateKey(setupSelectedCell.position);
+    if (!setupLegalCoordinateKeys.has(selectedKey)) return;
+
+    const existingAtCell = setupPlacementByCoordinate.get(selectedKey);
+    const placedElsewhere = setupPlacements.some(
+      (placement) => placement.unitId === setupSelectedUnitId && coordinateKey(placement.position) !== selectedKey,
+    );
+    if (placedElsewhere) return;
+    if (existingAtCell !== undefined && existingAtCell.unitId !== setupSelectedUnitId) {
+      setSetupPlacements((previous) => previous.filter((placement) => coordinateKey(placement.position) !== selectedKey));
+    }
+
+    setSetupPlacements((previous) => [
+      ...previous.filter((placement) =>
+        placement.unitId !== setupSelectedUnitId && coordinateKey(placement.position) !== selectedKey,
+      ),
+      { unitId: setupSelectedUnitId, position: setupSelectedCell.position, stance: setupSelectedStance },
+    ]);
+  };
+
+  const clearSelectedSetupPlacement = () => {
+    if (selectedSetupPlacement === undefined) return;
+    clearSetupPlacement(selectedSetupPlacement.unitId);
   };
 
   const submitSetupPlacement = () => {
@@ -612,7 +649,7 @@ export default function LocalMatchDebugClient({
             position: placement.position,
             stance: placement.stance,
           })),
-          reserveUnitIds: setupReserveUnitIds,
+          reserveUnitIds: setupAutoReserveUnitIds,
           expectedStateVersion: view.stateVersion,
           actionId: makeActionId(),
         },
@@ -713,17 +750,13 @@ export default function LocalMatchDebugClient({
     if (isFinished) return;
 
     if (isSetupPhase) {
-      if (setupSelectedUnitId === null || setupReserveIdSet.has(setupSelectedUnitId) || setupSubmitted) return;
+      if (setupSubmitted || setupLockedForPlayer2) return;
       const destinationKey = coordinateKey(destination);
-      const occupiedByOther = setupPlacements.some(
-        (placement) => placement.unitId !== setupSelectedUnitId && coordinateKey(placement.position) === destinationKey,
-      );
-      if (!setupLegalCoordinateKeys.has(destinationKey) || occupiedByOther) return;
-      setSetupPlacements((previous) => [
-        ...previous.filter((placement) => placement.unitId !== setupSelectedUnitId),
-        { unitId: setupSelectedUnitId, position: destination, stance: setupPlacementByUnitId.get(setupSelectedUnitId)?.stance ?? "attack" },
-      ]);
-      setSetupReserveUnitIds((previous) => previous.filter((id) => id !== setupSelectedUnitId));
+      if (!setupLegalCoordinateKeys.has(destinationKey)) return;
+      const draftAtCell = setupPlacementByCoordinate.get(destinationKey);
+      setSetupSelectedCell({ position: destination });
+      setSetupSelectedUnitId(draftAtCell?.unitId ?? null);
+      setSetupSelectedStance(draftAtCell?.stance ?? "attack");
       return;
     }
 
@@ -777,7 +810,7 @@ export default function LocalMatchDebugClient({
             </div>
             <div className={`rounded-2xl border px-3 py-2 text-right text-xs font-bold ${isViewerTurn ? "border-emerald-300/60 bg-emerald-400/15 text-emerald-50" : "border-slate-700 bg-slate-900 text-slate-300"}`}>
               <span className="block text-[0.58rem] uppercase tracking-[0.18em] text-slate-400">Turn</span>
-              {currentPlayer?.side ?? "—"}
+              {currentPlayer === undefined ? "—" : playerDisplayName(currentPlayer.side)}
             </div>
           </div>
           <div className="mt-3 grid grid-cols-4 gap-1.5 text-center text-[0.66rem] text-slate-300">
@@ -796,15 +829,44 @@ export default function LocalMatchDebugClient({
         {view.phase === "finished" ? (
           <section className="rounded-3xl border border-amber-200/60 bg-amber-400/15 p-4 text-amber-50 shadow-xl shadow-amber-950/30" role="status">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-100/80">Result</p>
-            <h2 className="mt-1 text-2xl font-black">{winner?.side ?? "—"} 勝利</h2>
+            <h2 className="mt-1 text-2xl font-black">{winner === undefined ? "—" : playerDisplayName(winner.side)} 勝利</h2>
             <p className="mt-2 text-sm">reason: {view.winReason ?? "—"}</p>
           </section>
         ) : null}
 
         <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-3">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="player view tabs">
             {viewerOptions.map((option) => {
               const selected = option.side === viewerSide;
+              const tabClasses = `min-h-12 rounded-2xl border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300 ${
+                selected
+                  ? "border-cyan-300 bg-cyan-300/15 text-cyan-50"
+                  : "border-slate-700 bg-slate-950/60 text-slate-300"
+              }`;
+              const tabContent = (
+                <>
+                  <span className="block text-[0.6rem] uppercase tracking-[0.2em] text-slate-400">
+                    {isSetupPhase ? "setup" : "viewer"}
+                  </span>
+                  <span className="mt-0.5 block font-bold">{playerDisplayName(option.side)}</span>
+                </>
+              );
+
+              if (isSetupPhase) {
+                return (
+                  <button
+                    key={option.side}
+                    type="button"
+                    disabled
+                    className={`${tabClasses} disabled:cursor-not-allowed disabled:opacity-80`}
+                    role="tab"
+                    aria-selected={selected}
+                  >
+                    {tabContent}
+                  </button>
+                );
+              }
+
               return (
                 <Link
                   key={option.side}
@@ -813,22 +875,23 @@ export default function LocalMatchDebugClient({
                     resetSelection();
                     refreshView(option.side);
                   }}
-                  className={`min-h-12 rounded-2xl border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300 ${
-                    selected
-                      ? "border-cyan-300 bg-cyan-300/15 text-cyan-50"
-                      : "border-slate-700 bg-slate-950/60 text-slate-300"
-                  }`}
+                  className={tabClasses}
+                  role="tab"
+                  aria-selected={selected}
                 >
-                  <span className="block text-[0.6rem] uppercase tracking-[0.2em] text-slate-400">
-                    viewer
-                  </span>
-                  <span className="mt-0.5 block font-bold">{option.side}</span>
+                  {tabContent}
                 </Link>
               );
             })}
           </div>
           <p className="mt-3 text-xs leading-5 text-slate-400">
-            {isFinished ? "勝敗確定後のため盤面操作は停止しています。" : isViewerTurn ? "自分の手番です。盤面の自軍ユニットかリザーバーを選択してください。" : "相手の手番です。投了のみ実行できます。"}
+            {isSetupPhase
+              ? "setup中は相手側へ自由に切り替えず、現在の設定担当者だけを表示します。"
+              : isFinished
+                ? "勝敗確定後のため盤面操作は停止しています。"
+                : isViewerTurn
+                  ? "自分の手番です。盤面の自軍ユニットかリザーバーを選択してください。"
+                  : "相手の手番です。投了のみ実行できます。"}
           </p>
         </section>
 
@@ -848,112 +911,159 @@ export default function LocalMatchDebugClient({
           <section className="w-full min-w-0 max-w-full overflow-x-hidden rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-3">
             <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
               <div className="min-w-0">
-                <h2 className="text-base font-bold text-cyan-50">初期配置</h2>
-                <p className="mt-1 text-xs text-cyan-100/80">カードを選び、盤面の「初」マスへ6体配置します。</p>
+                <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-cyan-100/70">Setup</p>
+                <h2 className="mt-1 text-lg font-black text-cyan-50">
+                  {playerDisplayName(viewerSide)}設定中 <span className="text-sm font-bold text-cyan-100/80">({playerAreaLabel(viewerSide)})</span>
+                </h2>
+                <p className="mt-1 text-xs text-cyan-100/80">盤面の配置可能マスを先にタップし、その場所へ置くカードとattack / defenseを選びます。</p>
               </div>
-              <div className="grid w-full min-w-0 grid-cols-2 gap-1 text-center text-[0.65rem] font-bold sm:w-auto sm:min-w-24">
+              <div className="grid w-full min-w-0 grid-cols-2 gap-1 text-center text-[0.65rem] font-bold sm:w-auto sm:min-w-28">
                 <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">配置 {setupPlacements.length}/6</span>
-                <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">予備 {setupReserveUnitIds.length}/2</span>
+                <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">リザーバー {setupAutoReserveUnits.length}/2</span>
               </div>
             </div>
-            <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs text-slate-200 sm:grid-cols-2">
-              <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">自分: {setupSubmitted ? "準備完了" : "未提出"}</span>
-              <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">相手: {opponentSetupSubmitted ? "準備完了" : "未完了"}</span>
+
+            <div className="mt-3 grid grid-cols-2 gap-2" role="tablist" aria-label="setup player tabs">
+              {(["south", "north"] as const).map((side) => {
+                const active = side === viewerSide;
+                const submitted = side === "south" ? firstPlayerSubmitted : secondPlayerSubmitted;
+                return (
+                  <button
+                    key={`setup-tab-${side}`}
+                    type="button"
+                    disabled
+                    className={`min-h-11 rounded-2xl border px-3 py-2 text-left text-xs ${
+                      active
+                        ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/60"
+                        : "border-slate-700 bg-slate-950/70 text-slate-400"
+                    }`}
+                    role="tab"
+                    aria-selected={active}
+                  >
+                    <span className="block font-black">{playerDisplayName(side)}</span>
+                    <span className="text-[0.62rem]">{submitted ? "確定済み" : active ? "設定中" : "未完了"}</span>
+                  </button>
+                );
+              })}
             </div>
-            {setupSubmitted ? (
-              <p className="mt-3 rounded-2xl border border-emerald-300/40 bg-emerald-400/10 p-3 text-sm text-emerald-50">
-                提出済みです。再提出はできません。相手の具体的な配置・リザーバーは表示しません。
-              </p>
+
+            {setupLockedForPlayer2 ? (
+              <div className="mt-4 rounded-3xl border border-slate-700 bg-slate-950/80 p-5 text-center">
+                <h3 className="text-lg font-black text-white">プレイヤー1設定中</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-300">プレイヤー1の確定後、引き渡し画面からプレイヤー2の設定を開始します。</p>
+              </div>
+            ) : setupIsHandoff ? (
+              <div className="mt-4 rounded-3xl border border-emerald-300/40 bg-emerald-400/10 p-5 text-center">
+                <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-emerald-100/70">Handoff</p>
+                <h3 className="mt-2 text-2xl font-black text-emerald-50">プレイヤー1の配置が完了しました</h3>
+                <p className="mt-3 text-sm leading-6 text-emerald-50/85">端末をプレイヤー2へ渡してください。プレイヤー1のカード名、配置、stance、リザーバー内容はこの画面には表示しません。</p>
+                <button
+                  type="button"
+                  onClick={() => refreshView("north")}
+                  disabled={isPending}
+                  className="mt-5 min-h-12 w-full rounded-2xl border border-cyan-200 bg-cyan-300/20 px-4 py-3 text-sm font-black text-cyan-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  プレイヤー2の設定を始める
+                </button>
+              </div>
             ) : (
-              <div className="mt-4 grid min-w-0 max-w-full grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
-                <div className="min-w-0">
-                  <h3 className="text-sm font-bold text-white">自分のカード</h3>
-                  <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-                    {ownSetupUnits.map((unit) => {
-                      const placement = setupPlacementByUnitId.get(unit.unitId);
-                      const selected = setupSelectedUnitId === unit.unitId;
-                      return (
-                        <button
-                          key={unit.unitId}
-                          type="button"
-                          onClick={() => selectSetupUnit(unit.unitId)}
-                          disabled={setupSubmitted || isPending}
-                          className={`min-h-16 w-full min-w-0 max-w-full rounded-2xl border px-3 py-2 text-left text-xs transition disabled:opacity-40 ${
-                            selected
-                              ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/70"
-                              : setupReserveIdSet.has(unit.unitId)
-                                ? "border-emerald-200 bg-emerald-300/15 text-emerald-50"
-                                : placement !== undefined
-                                  ? "border-white/60 bg-white/10 text-white"
-                                  : "border-slate-700 bg-slate-950/80 text-slate-300"
-                          }`}
-                        >
-                          <span className="block min-w-0 break-words font-bold text-white">{unit.revealed ? unit.card.cardName : compactId(unit.unitId)}</span>
-                          <span className="block min-w-0 break-words text-slate-400">{placement === undefined ? "未配置" : toCoordinateLabel(placement.position)}</span>
-                        </button>
-                      );
-                    })}
+              <div className="mt-4 grid gap-3">
+                <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3 text-xs text-slate-200">
+                  <div className="grid grid-cols-2 gap-2">
+                    <span>選択マス: <strong className="text-white">{setupSelectedCell === null ? "—" : toCoordinateLabel(setupSelectedCell.position)}</strong></span>
+                    <span>選択カード: <strong className="text-white">{selectedSetupUnit?.revealed ? selectedSetupUnit.card.cardName : "—"}</strong></span>
                   </div>
+                  <p className="mt-2 text-slate-400">残りカード名: {setupAutoReserveUnits.map((unit) => unit.revealed ? unit.card.cardName : compactId(unit.unitId)).join(" / ") || "—"}</p>
                 </div>
-                <div className="grid min-w-0 gap-3">
-                  <div className="min-w-0 rounded-2xl border border-slate-700 bg-slate-950/70 p-3">
-                    <h3 className="text-sm font-bold text-white">選択中</h3>
-                    <p className="mt-1 min-w-0 break-words text-xs text-slate-400">
-                      {selectedSetupUnit === null ? "カードを選択してください。" : `${selectedSetupUnit.revealed ? selectedSetupUnit.card.cardName : compactId(selectedSetupUnit.unitId)} を配置またはリザーブ指定できます。`}
-                    </p>
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-bold text-white">仮配置済み</h3>
-                    <div className="mt-2 grid min-w-0 gap-2">
-                      {setupPlacements.length === 0 ? <p className="text-xs text-slate-400">なし</p> : setupPlacements.map((placement) => {
-                        const unit = ownSetupUnits.find((candidate) => candidate.unitId === placement.unitId);
+
+                {setupSelectedCell !== null ? (
+                  <div className="rounded-3xl border border-cyan-300/30 bg-slate-950/90 p-3 shadow-xl shadow-cyan-950/20">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-black text-white">{toCoordinateLabel(setupSelectedCell.position)}へ配置</h3>
+                        <p className="mt-1 text-xs text-slate-400">未配置カード、またはこのマスに配置済みのカードだけを選べます。</p>
+                      </div>
+                      <button type="button" onClick={resetSetupSelection} className="rounded-xl border border-slate-600 px-3 py-2 text-xs font-bold text-slate-200">キャンセル</button>
+                    </div>
+
+                    <div className="mt-3 grid max-h-48 min-w-0 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                      {ownSetupUnits.map((unit) => {
+                        const placement = setupPlacementByUnitId.get(unit.unitId);
+                        const placedAtSelectedCell = placement !== undefined && selectedSetupCoordinateKey !== null && coordinateKey(placement.position) === selectedSetupCoordinateKey;
+                        const disabled = placement !== undefined && !placedAtSelectedCell;
+                        const selected = setupSelectedUnitId === unit.unitId;
                         return (
-                          <div key={placement.unitId} className="min-w-0 rounded-2xl border border-slate-700 bg-slate-950/80 p-3 text-xs">
-                            <button type="button" onClick={() => selectSetupUnit(placement.unitId)} className="max-w-full break-words text-left font-bold text-cyan-100">
-                              {unit?.revealed ? unit.card.cardName : compactId(placement.unitId)} / {toCoordinateLabel(placement.position)}
-                            </button>
-                            <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
-                              {(["attack", "defense"] as const).map((stance) => (
-                                <button key={stance} type="button" onClick={() => updateSetupStance(placement.unitId, stance)} className={`min-h-10 rounded-xl border px-2 py-2 font-bold ${placement.stance === stance ? "border-cyan-200 bg-cyan-300/20 text-cyan-50" : "border-slate-700 text-slate-300"}`}>{stanceLabel(stance)} {stance}</button>
-                              ))}
-                              <button type="button" onClick={() => clearSetupPlacement(placement.unitId)} className="min-h-10 rounded-xl border border-rose-300/50 px-2 py-2 font-bold text-rose-100">解除</button>
-                            </div>
-                          </div>
+                          <button
+                            key={`setup-card-${unit.unitId}`}
+                            type="button"
+                            onClick={() => selectSetupUnit(unit.unitId)}
+                            disabled={disabled || isPending}
+                            className={`min-h-12 w-full min-w-0 rounded-2xl border px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+                              selected
+                                ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/60"
+                                : disabled
+                                  ? "border-slate-800 bg-slate-950/50 text-slate-500"
+                                  : "border-slate-700 bg-slate-900 text-slate-200"
+                            }`}
+                          >
+                            <span className="block break-words font-black text-white">{unit.revealed ? unit.card.cardName : compactId(unit.unitId)}</span>
+                            <span className="text-slate-400">{placement === undefined ? "未配置" : placedAtSelectedCell ? "このマスに配置済み" : `${toCoordinateLabel(placement.position)}に配置済み`}</span>
+                          </button>
                         );
                       })}
                     </div>
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-bold text-white">リザーバー予定</h3>
-                    <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-                      {ownSetupUnits.map((unit) => (
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      {(["attack", "defense"] as const).map((stance) => (
                         <button
-                          key={`reserve-${unit.unitId}`}
+                          key={`setup-stance-${stance}`}
                           type="button"
-                          disabled={setupSubmitted || isPending || (!setupReserveIdSet.has(unit.unitId) && setupReserveUnitIds.length >= 2)}
-                          onClick={() => toggleSetupReserve(unit.unitId)}
-                          className={`min-h-11 w-full min-w-0 max-w-full break-words rounded-2xl border px-3 py-2 text-left text-xs disabled:opacity-40 ${setupReserveIdSet.has(unit.unitId) ? "border-emerald-200 bg-emerald-300/20 text-emerald-50" : "border-slate-700 bg-slate-950/80 text-slate-300"}`}
+                          onClick={() => setSetupSelectedStance(stance)}
+                          className={`min-h-12 rounded-2xl border px-3 py-2 text-sm font-black ${
+                            setupSelectedStance === stance
+                              ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/60"
+                              : "border-slate-700 bg-slate-900 text-slate-300"
+                          }`}
                         >
-                          {unit.revealed ? unit.card.cardName : compactId(unit.unitId)}
+                          {stanceLabel(stance)} {stance}
                         </button>
                       ))}
                     </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={clearSelectedSetupPlacement}
+                        disabled={selectedSetupPlacement === undefined || isPending}
+                        className="min-h-12 rounded-2xl border border-rose-300/50 bg-rose-500/10 px-3 py-3 text-sm font-bold text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        配置解除
+                      </button>
+                      <button
+                        type="button"
+                        onClick={placeSetupSelection}
+                        disabled={setupSelectedUnitId === null || isPending}
+                        className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-black text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        配置決定
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    disabled={setupSubmitted || isPending || setupPlacements.length !== 6 || setupReserveUnitIds.length !== 2}
-                    onClick={submitSetupPlacement}
-                    className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    配置を提出
-                  </button>
-                  {!setupSubmitted && (setupPlacements.length !== 6 || setupReserveUnitIds.length !== 2) ? (
-                    <p className="text-xs text-slate-400">6体配置・2体リザーブを満たすと提出できます。</p>
-                  ) : null}
-                  {setupSubmitted && !opponentSetupSubmitted ? (
-                    <p className="text-xs text-slate-300">相手の準備完了を待っています。</p>
-                  ) : null}
-                </div>
+                ) : (
+                  <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3 text-sm text-slate-300">盤面の「初」マスをタップするとカード選択UIが開きます。</p>
+                )}
+
+                <button
+                  type="button"
+                  disabled={setupSubmitted || isPending || setupPlacements.length !== 6 || setupAutoReserveUnits.length !== 2}
+                  onClick={submitSetupPlacement}
+                  className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-black text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  配置を確定
+                </button>
+                {!setupSubmitted && setupPlacements.length !== 6 ? (
+                  <p className="text-xs text-slate-400">6体配置すると残り2体が自動的にリザーバー予定になり、確定できます。</p>
+                ) : null}
               </div>
             )}
           </section>
@@ -991,8 +1101,9 @@ export default function LocalMatchDebugClient({
                     const setupDraftUnit = setupDraft === undefined ? null : ownSetupUnits.find((unit) => unit.unitId === setupDraft.unitId) ?? null;
                     const unit = isSetupPhase ? setupDraftUnit : cell.unit;
                     const coordinate = coordinateKey(cell.coordinate);
-                    const setupLegal = isSetupPhase && setupSelectedUnitId !== null && !setupReserveIdSet.has(setupSelectedUnitId) && setupLegalCoordinateKeys.has(coordinate) && (!setupOccupiedCoordinateKeys.has(coordinate) || setupDraft?.unitId === setupSelectedUnitId);
-                    const selected = unit?.unitId === selectedUnitId || setupDraft?.unitId === setupSelectedUnitId;
+                    const setupLegal = isSetupPhase && !setupSubmitted && !setupLockedForPlayer2 && setupLegalCoordinateKeys.has(coordinate);
+                    const setupCellSelected = selectedSetupCoordinateKey === coordinate;
+                    const selected = unit?.unitId === selectedUnitId || setupCellSelected;
                     const candidate = candidatesByCoordinate.get(coordinate);
                     const destinationSelected = selectedDestination !== null && coordinateKey(selectedDestination.destination) === coordinate;
                     const cellLabel = `${toCoordinateLabel(cell.coordinate)}${candidate === undefined ? "" : ` ${candidateLabel(candidate)}`}${unit === null ? " empty" : ` ${isOwnUnit(view, unit) ? "own" : "enemy"} ${unit.revealed ? "revealed" : "hidden"}`}`;
@@ -1003,7 +1114,7 @@ export default function LocalMatchDebugClient({
                         onClick={() => handleCellClick(unit, cell.coordinate)}
                         disabled={isFinished}
                         className={`relative aspect-square min-w-0 rounded-lg border p-0.5 text-[0.55rem] shadow-lg transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-70 sm:rounded-xl ${
-                          destinationSelected
+                          destinationSelected || setupCellSelected
                             ? "border-white bg-white/20 ring-2 ring-white"
                             : selected
                               ? "border-white bg-white/10 ring-2 ring-white/80"
@@ -1038,7 +1149,8 @@ export default function LocalMatchDebugClient({
           </div>
         </section>
 
-        <section className="rounded-3xl border border-slate-800 bg-slate-900/95 p-3 shadow-2xl shadow-black/30 sm:p-4">
+        {!isSetupPhase ? (
+          <section className="rounded-3xl border border-slate-800 bg-slate-900/95 p-3 shadow-2xl shadow-black/30 sm:p-4">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-base font-bold text-white">主要操作</h2>
             <span className={`rounded-full border px-3 py-1 text-xs font-bold ${isViewerTurn ? "border-emerald-300/60 bg-emerald-400/15 text-emerald-50" : "border-slate-700 bg-slate-950 text-slate-400"}`}>
@@ -1108,7 +1220,8 @@ export default function LocalMatchDebugClient({
               確認して実行
             </button>
           </div>
-        </section>
+          </section>
+        ) : null}
 
         {!isSetupPhase ? (
           <section className="grid gap-3 lg:grid-cols-2">
@@ -1127,9 +1240,10 @@ export default function LocalMatchDebugClient({
           </section>
         ) : null}
 
-        <DetailPanel unit={selectedUnit} />
+        {!isSetupPhase ? <DetailPanel unit={selectedUnit} /> : null}
 
-        <section className="rounded-3xl border border-rose-300/30 bg-rose-500/10 p-4">
+        {!isSetupPhase ? (
+          <section className="rounded-3xl border border-rose-300/30 bg-rose-500/10 p-4">
           <h2 className="text-base font-bold text-rose-50">危険操作</h2>
           <p className="mt-2 text-xs leading-5 text-rose-100/80">
             投了・リセットは確認用ボタンを分けています。activeフェーズなら自分の手番以外でもCONCEDE_MATCHを送信できます。
@@ -1156,7 +1270,8 @@ export default function LocalMatchDebugClient({
               投了実行
             </button>
           </div>
-        </section>
+          </section>
+        ) : null}
 
         <EventLog events={data.events} />
 

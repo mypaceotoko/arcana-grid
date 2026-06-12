@@ -564,6 +564,9 @@ describe("local debug match harness initial placement and start", () => {
     expect(response.view.phase).toBe("setup");
     expect(response.view.players.find((player) => player.id === response.view.viewerId)?.setupSubmitted).toBe(true);
     expect(response.events.map((event) => event.type)).toContain("INITIAL_PLACEMENT_SUBMITTED");
+    expect(JSON.stringify(response)).not.toContain("South Setup");
+    expect(response.view.units.filter((unit) => unit.ownerId === response.view.viewerId)).toHaveLength(0);
+    expect(response.view.players.find((player) => player.id === response.view.viewerId)?.reserveUnitIds).toEqual([]);
     expectErrorCode(
       submitLocalDebugInitialPlacement({
         viewerSide: "south",
@@ -581,6 +584,21 @@ describe("local debug match harness initial placement and start", () => {
     expect(serialized).not.toContain("debug-card-south-setup");
     expect(northView.view.players.find((player) => player.id === LOCAL_DEBUG_MATCH_PLAYER_IDS.south)?.reserveUnitIds).toEqual([]);
     expect(northView.view.players.find((player) => player.id === LOCAL_DEBUG_MATCH_PLAYER_IDS.south)?.setupSubmitted).toBe(true);
+  });
+
+  it("enforces local handoff order before player 2 setup submission", () => {
+    unwrap(resetLocalDebugMatch("north"));
+
+    expectErrorCode(
+      submitLocalDebugInitialPlacement({
+        viewerSide: "north",
+        placements: placements("north"),
+        reserveUnitIds: reserves("north"),
+        expectedStateVersion: localDebugSetupMatchState.stateVersion,
+        actionId: moveActionId("setup-north-too-early"),
+      }),
+      "INVALID_ACTION",
+    );
   });
 
   it("starts via startTacticalDuelMatch after both submissions and allows active MOVE_UNIT", () => {
