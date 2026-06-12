@@ -33,6 +33,7 @@
 - 両者提出後のデバッグハーネス内first player決定、`startTacticalDuelMatch`実行、MATCH_STARTEDイベント表示、activeフェーズ接続。
 - 現在viewerの自分の盤面ユニット選択、サーバー側合法移動候補取得、通常移動/戦闘候補の区別表示、attack/defense選択、MOVE_UNIT実行、DEPLOY_RESERVE、ATTACK_FLAG、CONCEDE_MATCH、イベントログ、setup/active fixtureリセット。
 - Task 7E: iPhone縦画面を優先した `/debug/local-match` のモバイルUI・UX改善。上部のコンパクトな対戦ステータス、横スクロールしない8×8盤面、座標表示、候補種別バッジ、旗ダメージメーター、押しやすいattack/defense選択、折りたたみイベントログ/リセット詳細、finished結果パネルを追加。active中の相手伏せカードは位置・裏面だけを安全に表示し、カード名や数値は渡さない。
+- Task 7F: 公開URL用ブラウザ内デバッグ対戦状態を追加。`/debug/local-match` は `localStorage` キー `arcana-grid.local-match.v1` に正規デバッグ用MatchState、イベント履歴、viewer/handoffフローを保存し、ブラウザ内ハーネスで既存reducer・開始処理・PlayerMatchView生成を呼ぶ。公開URLではページ表示と操作をサーバーインメモリに依存させず、壊れた保存データやrulesVersion不一致はsetup fixtureへ安全に戻す。
 
 ## テスト状況
 
@@ -43,11 +44,11 @@
   - `npm run lint`（既存の `tests/unit/game/types.test.ts` にwarning 1件あり）
   - `npm run test`
   - `npm run build`
-- 開発サーバーで `/debug/local-match?viewer=south`、`?viewer=north`、状態取得、移動候補取得、旗攻撃候補取得、リザーバー候補取得、setup/activeリセット、HTML/JSONの未公開カード詳細混入なしをcurlで確認済み。
+- 開発サーバーで `/debug/local-match?viewer=south` のHTML応答とブラウザ内保存表示をcurlで確認済み。ブラウザ内ハーネスのsetup提出、active復元、移動、戦闘、リザーバー投入、旗攻撃、投了、壊れたJSON、rulesVersion不一致、stale stateVersion、秘密情報ビューはVitestで確認済み。
 
 ## 現在の次タスク
 
-- 次タスク: Task 7Fのローカル対戦UI品質確認、またはオンライン対戦基盤。
+- 次タスク: Task 7Fの公開URL用ブラウザ内デバッグ対戦状態の追加後確認、またはオンライン対戦基盤。
 - 今回未実装: 戦闘アニメーション、カード画像の本格導入、Supabase/Auth/Database/Realtime/オンライン対戦。
 
 ## 未実装項目

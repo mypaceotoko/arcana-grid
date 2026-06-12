@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
-import { getFlagAreaCoordinates } from "@/game";
+import { getFlagAreaCoordinates, toActionId } from "@/game";
 import type {
   Coordinate,
   MatchPlayerState,
   PlayerMatchView,
   PlayerSide,
   Stance,
+  UnitId,
   UnitView,
 } from "@/game";
 
@@ -21,6 +22,7 @@ import {
   isOwnUnit,
   toCoordinateLabel,
 } from "./display";
+import { createLocalDebugBrowserHarness } from "./browser-state";
 import type {
   LocalDebugEventLogEntry,
   LocalDebugFlagAttackCandidate,
@@ -39,12 +41,8 @@ type LocalMatchDebugClientProps = {
   viewerOptions: readonly ViewerOption[];
 };
 
-type ApiSuccess<T> = { ok: true; value: T };
-type ApiFailure = { ok: false; error: { code: string; message: string } };
-type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
-
 type ActionMode = "none" | "move" | "deploy" | "flag_attack" | "concede";
-type SetupDraftPlacement = { unitId: string; position: Coordinate; stance: Stance };
+type SetupDraftPlacement = { unitId: UnitId; position: Coordinate; stance: Stance };
 type SetupSelectedCell = { position: Coordinate };
 type ActionStep = "idle" | "destination" | "stance" | "confirm";
 type BoardCandidate =
@@ -426,7 +424,7 @@ const SetupPlacementMenu = ({
   selectedStance: Stance | null;
   selectedPlacement: SetupDraftPlacement | undefined;
   isPending: boolean;
-  onSelectUnit: (unitId: string) => void;
+  onSelectUnit: (unitId: UnitId) => void;
   onSelectStance: (stance: Stance) => void;
   onPlace: () => void;
   onClear: () => void;
@@ -559,11 +557,12 @@ export default function LocalMatchDebugClient({
   const [selectedDestination, setSelectedDestination] = useState<BoardCandidate | null>(null);
   const [nextStance, setNextStance] = useState<Stance>("attack");
   const [setupSelectedCell, setSetupSelectedCell] = useState<SetupSelectedCell | null>(null);
-  const [setupSelectedUnitId, setSetupSelectedUnitId] = useState<string | null>(null);
+  const [setupSelectedUnitId, setSetupSelectedUnitId] = useState<UnitId | null>(null);
   const [setupSelectedStance, setSetupSelectedStance] = useState<Stance | null>(null);
   const [setupPlacements, setSetupPlacements] = useState<readonly SetupDraftPlacement[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const browserHarnessRef = useRef<ReturnType<typeof createLocalDebugBrowserHarness> | null>(null);
 
   const { view } = data;
   const viewerSide = getViewerSide(view);
@@ -668,28 +667,34 @@ export default function LocalMatchDebugClient({
     resetSetupDraft();
   };
 
-  const postJson = async <T,>(path: string, body: Record<string, unknown>): Promise<ApiResponse<T>> => {
-    const response = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+
+  useEffect(() => {
+    const harness = createLocalDebugBrowserHarness(window.localStorage, getViewerSide(initialData.view));
+    browserHarnessRef.current = harness;
+    const response = harness.getView(harness.flow.viewerSide);
+
+    queueMicrotask(() => {
+      if (!response.ok) {
+        setErrorMessage(response.error.message);
+        return;
+      }
+
+      applyViewResponse(response.value);
     });
-    return (await response.json()) as ApiResponse<T>;
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchBoardCandidates = (unitId: UnitView["unitId"]) => {
     setErrorMessage(null);
     startTransition(async () => {
-      const [moveResponse, flagResponse] = await Promise.all([
-        postJson<{ candidates: readonly LocalDebugMoveCandidate[] }>(
-          "/debug/local-match/api/moves",
-          { viewerSide, unitId },
-        ),
-        postJson<{ candidates: readonly LocalDebugFlagAttackCandidate[] }>(
-          "/debug/local-match/api/flag-attacks",
-          { viewerSide, unitId },
-        ),
-      ]);
+      const harness = browserHarnessRef.current;
+      if (harness === null) {
+        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        return;
+      }
+
+      const moveResponse = harness.getMoveCandidates({ viewerSide, unitId });
+      const flagResponse = harness.getFlagAttackCandidates({ viewerSide, unitId });
 
       if (!moveResponse.ok) {
         resetSelection();
@@ -713,10 +718,13 @@ export default function LocalMatchDebugClient({
   const fetchReserveCandidates = (unitId: UnitView["unitId"]) => {
     setErrorMessage(null);
     startTransition(async () => {
-      const response = await postJson<{ candidates: readonly LocalDebugReserveCandidate[] }>(
-        "/debug/local-match/api/reserve-candidates",
-        { viewerSide, unitId },
-      );
+      const harness = browserHarnessRef.current;
+      if (harness === null) {
+        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        return;
+      }
+
+      const response = harness.getReserveDeploymentCandidates({ viewerSide, unitId });
 
       if (!response.ok) {
         resetSelection();
@@ -734,25 +742,30 @@ export default function LocalMatchDebugClient({
 
   const refreshView = (side: PlayerSide) => {
     setErrorMessage(null);
-    startTransition(async () => {
-      const response = await fetch(`/debug/local-match/api/state?viewer=${side}`);
-      const payload = (await response.json()) as ApiResponse<LocalDebugViewResponse>;
-
-      if (!payload.ok) {
-        setErrorMessage(payload.error.message);
+    startTransition(() => {
+      const harness = browserHarnessRef.current;
+      if (harness === null) {
+        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
         return;
       }
 
-      applyViewResponse(payload.value);
+      const response = harness.getView(side);
+
+      if (!response.ok) {
+        setErrorMessage(response.error.message);
+        return;
+      }
+
+      applyViewResponse(response.value);
     });
   };
 
-  const selectSetupUnit = (unitId: string) => {
+  const selectSetupUnit = (unitId: UnitId) => {
     if (!isSetupPhase || setupSubmitted || isPending || setupSelectedCell === null) return;
     setSetupSelectedUnitId(unitId);
   };
 
-  const clearSetupPlacement = (unitId: string) => {
+  const clearSetupPlacement = (unitId: UnitId) => {
     setSetupPlacements((previous) => previous.filter((placement) => placement.unitId !== unitId));
     setSetupSelectedUnitId(unitId);
   };
@@ -788,22 +801,24 @@ export default function LocalMatchDebugClient({
 
   const submitSetupPlacement = () => {
     setErrorMessage(null);
-    startTransition(async () => {
-      const response = await postJson<LocalDebugViewResponse>(
-        "/debug/local-match/api/action",
-        {
-          actionType: "SUBMIT_INITIAL_PLACEMENT",
-          viewerSide,
-          placements: setupPlacements.map((placement) => ({
-            unitId: placement.unitId,
-            position: placement.position,
-            stance: placement.stance,
-          })),
-          reserveUnitIds: setupAutoReserveUnitIds,
-          expectedStateVersion: view.stateVersion,
-          actionId: makeActionId(),
-        },
-      );
+    startTransition(() => {
+      const harness = browserHarnessRef.current;
+      if (harness === null) {
+        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        return;
+      }
+
+      const response = harness.submitInitialPlacement({
+        viewerSide,
+        placements: setupPlacements.map((placement) => ({
+          unitId: placement.unitId,
+          position: placement.position,
+          stance: placement.stance,
+        })),
+        reserveUnitIds: setupAutoReserveUnitIds,
+        expectedStateVersion: view.stateVersion,
+        actionId: toActionId(makeActionId()),
+      });
 
       if (!response.ok) {
         setErrorMessage(response.error.message);
@@ -817,16 +832,18 @@ export default function LocalMatchDebugClient({
   const submitSelectedAction = () => {
     if (actionMode === "concede") {
       setErrorMessage(null);
-      startTransition(async () => {
-        const response = await postJson<LocalDebugViewResponse>(
-          "/debug/local-match/api/action",
-          {
-            actionType: "CONCEDE_MATCH",
-            viewerSide,
-            expectedStateVersion: view.stateVersion,
-            actionId: makeActionId(),
-          },
-        );
+      startTransition(() => {
+        const harness = browserHarnessRef.current;
+        if (harness === null) {
+          setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+          return;
+        }
+
+        const response = harness.submitConcedeMatch({
+          viewerSide,
+          expectedStateVersion: view.stateVersion,
+          actionId: toActionId(makeActionId()),
+        });
 
         if (!response.ok) {
           setErrorMessage(response.error.message);
@@ -847,28 +864,41 @@ export default function LocalMatchDebugClient({
           ? "DEPLOY_RESERVE"
           : "MOVE_UNIT";
 
-    const actionBody: Record<string, unknown> = {
-      actionType,
-      viewerSide,
-      unitId: selectedUnitId,
-      nextStance,
-      stance: nextStance,
-      expectedStateVersion: view.stateVersion,
-      actionId: makeActionId(),
-    };
-
-    if (actionType === "ATTACK_FLAG") {
-      actionBody.target = selectedDestination.destination;
-    } else {
-      actionBody.destination = selectedDestination.destination;
-    }
-
     setErrorMessage(null);
-    startTransition(async () => {
-      const response = await postJson<LocalDebugViewResponse>(
-        "/debug/local-match/api/action",
-        actionBody,
-      );
+    startTransition(() => {
+      const harness = browserHarnessRef.current;
+      if (harness === null) {
+        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        return;
+      }
+
+      const response =
+        actionType === "ATTACK_FLAG"
+          ? harness.submitAttackFlag({
+              viewerSide,
+              unitId: selectedUnitId,
+              target: selectedDestination.destination,
+              nextStance,
+              expectedStateVersion: view.stateVersion,
+              actionId: toActionId(makeActionId()),
+            })
+          : actionType === "DEPLOY_RESERVE"
+            ? harness.submitDeployReserve({
+                viewerSide,
+                unitId: selectedUnitId,
+                destination: selectedDestination.destination,
+                stance: nextStance,
+                expectedStateVersion: view.stateVersion,
+                actionId: toActionId(makeActionId()),
+              })
+            : harness.submitMoveUnit({
+                viewerSide,
+                unitId: selectedUnitId,
+                destination: selectedDestination.destination,
+                nextStance,
+                expectedStateVersion: view.stateVersion,
+                actionId: toActionId(makeActionId()),
+              });
 
       if (!response.ok) {
         setErrorMessage(response.error.message);
@@ -881,12 +911,34 @@ export default function LocalMatchDebugClient({
 
   const resetMatch = (fixture: "setup" | "active") => {
     setErrorMessage(null);
-    startTransition(async () => {
-      const response = await postJson<LocalDebugViewResponse>(
-        "/debug/local-match/api/reset",
-        { viewerSide, fixture },
-      );
+    startTransition(() => {
+      const harness = browserHarnessRef.current;
+      if (harness === null) {
+        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        return;
+      }
 
+      const response = harness.reset(viewerSide, fixture);
+
+      if (!response.ok) {
+        setErrorMessage(response.error.message);
+        return;
+      }
+
+      applyViewResponse(response.value);
+    });
+  };
+
+  const clearSavedMatch = () => {
+    setErrorMessage(null);
+    startTransition(() => {
+      const harness = browserHarnessRef.current;
+      if (harness === null) {
+        setErrorMessage("ブラウザ内デバッグ保存の初期化中です。");
+        return;
+      }
+
+      const response = harness.clear("south");
       if (!response.ok) {
         setErrorMessage(response.error.message);
         return;
@@ -982,6 +1034,11 @@ export default function LocalMatchDebugClient({
           </div>
         </header>
 
+        <section className="rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-3 text-xs leading-5 text-cyan-50/90">
+          <p className="font-black">ブラウザ内デバッグ保存</p>
+          <p>正式オンライン保存ではありません。この端末だけに保存され、公開URLでもサーバーメモリに依存せず復元します。</p>
+        </section>
+
         {view.phase === "finished" ? (
           <section className="rounded-3xl border border-amber-200/60 bg-amber-400/15 p-4 text-amber-50 shadow-xl shadow-amber-950/30" role="status">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-100/80">Result</p>
@@ -1059,7 +1116,7 @@ export default function LocalMatchDebugClient({
 
         {isPending ? (
           <div className="rounded-2xl border border-cyan-300/40 bg-cyan-300/10 p-3 text-sm font-semibold text-cyan-100" role="status">
-            処理中… サーバーハーネスの応答を待っています。
+            処理中… ブラウザ内デバッグハーネスで検証しています。
           </div>
         ) : null}
 
@@ -1402,6 +1459,13 @@ export default function LocalMatchDebugClient({
               className="min-h-12 rounded-3xl border border-rose-300/50 bg-rose-500/10 px-4 py-3 text-sm font-bold text-rose-100"
             >
               activeへリセット
+            </button>
+            <button
+              type="button"
+              onClick={clearSavedMatch}
+              className="col-span-2 min-h-12 rounded-3xl border border-slate-500 bg-slate-950 px-4 py-3 text-sm font-bold text-slate-100"
+            >
+              保存データ削除・完全初期化
             </button>
           </div>
         </details>
