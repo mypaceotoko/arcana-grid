@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 
+import { getFlagAreaCoordinates } from "@/game";
 import type {
   Coordinate,
   MatchPlayerState,
@@ -220,12 +221,20 @@ const FlagPanel = ({
   view,
   player,
   compact = false,
+  active = false,
 }: {
   view: PlayerMatchView;
   player: MatchPlayerState;
   compact?: boolean;
+  active?: boolean;
 }) => (
-  <div className="rounded-2xl border border-slate-700/80 bg-slate-950/70 p-3">
+  <div
+    className={`rounded-2xl border p-3 ${
+      active
+        ? "border-cyan-200 bg-cyan-300/15 ring-2 ring-cyan-200/50"
+        : "border-slate-700/80 bg-slate-950/70"
+    }`}
+  >
     <div className="flex items-center justify-between gap-3">
       <div>
         <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-slate-400">
@@ -234,6 +243,11 @@ const FlagPanel = ({
         <p className="mt-0.5 text-sm font-bold text-white">
           {formatPlayerLabel(view, player)}
         </p>
+        {active ? (
+          <span className="mt-1 inline-flex rounded-full border border-cyan-200/70 bg-cyan-300/20 px-2 py-0.5 text-[0.62rem] font-black text-cyan-50">
+            設定中
+          </span>
+        ) : null}
       </div>
       <div className="min-w-20 text-right">
         <p className="text-xs font-bold text-rose-100">
@@ -388,6 +402,129 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
   );
 };
 
+
+const SetupPlacementMenu = ({
+  coordinate,
+  units,
+  placementByUnitId,
+  selectedCoordinateKey,
+  selectedUnitId,
+  selectedStance,
+  selectedPlacement,
+  isPending,
+  onSelectUnit,
+  onSelectStance,
+  onPlace,
+  onClear,
+  onCancel,
+}: {
+  coordinate: Coordinate;
+  units: readonly UnitView[];
+  placementByUnitId: ReadonlyMap<string, SetupDraftPlacement>;
+  selectedCoordinateKey: string;
+  selectedUnitId: string | null;
+  selectedStance: Stance | null;
+  selectedPlacement: SetupDraftPlacement | undefined;
+  isPending: boolean;
+  onSelectUnit: (unitId: string) => void;
+  onSelectStance: (stance: Stance) => void;
+  onPlace: () => void;
+  onClear: () => void;
+  onCancel: () => void;
+}) => (
+  <div
+    className="rounded-2xl border border-cyan-200/70 bg-slate-950/95 p-2.5 text-left shadow-2xl shadow-black/60 ring-1 ring-cyan-200/20 backdrop-blur"
+    role="dialog"
+    aria-label={`${toCoordinateLabel(coordinate)} initial placement menu`}
+  >
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0">
+        <p className="text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-cyan-100/70">配置メニュー</p>
+        <h3 className="mt-0.5 text-sm font-black text-white">{toCoordinateLabel(coordinate)}</h3>
+      </div>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-[0.65rem] font-bold text-slate-200"
+      >
+        キャンセル
+      </button>
+    </div>
+
+    <div className="mt-2 grid max-h-36 grid-cols-2 gap-1.5 overflow-y-auto pr-1">
+      {units.map((unit) => {
+        const placement = placementByUnitId.get(unit.unitId);
+        const placedAtSelectedCell = placement !== undefined && coordinateKey(placement.position) === selectedCoordinateKey;
+        const disabled = placement !== undefined && !placedAtSelectedCell;
+        const selected = selectedUnitId === unit.unitId;
+        const cardName = unit.revealed ? unit.card.cardName : compactId(unit.unitId);
+        return (
+          <button
+            key={`setup-popover-card-${unit.unitId}`}
+            type="button"
+            onClick={() => onSelectUnit(unit.unitId)}
+            disabled={disabled || isPending}
+            className={`min-h-10 min-w-0 rounded-xl border px-2 py-1.5 text-left text-[0.68rem] leading-tight disabled:cursor-not-allowed disabled:opacity-40 ${
+              selected
+                ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-1 ring-cyan-200/70"
+                : disabled
+                  ? "border-slate-800 bg-slate-950/70 text-slate-500"
+                  : "border-slate-700 bg-slate-900 text-slate-200"
+            }`}
+            aria-pressed={selected}
+          >
+            <span className="block truncate font-black text-white">{cardName}</span>
+            <span className="block truncate text-[0.58rem] text-slate-400">
+              {placement === undefined ? "未配置" : placedAtSelectedCell ? "このマス" : "配置済み"}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+
+    <div className="mt-2 grid grid-cols-2 gap-1.5">
+      {(["attack", "defense"] as const).map((stance) => {
+        const selected = selectedStance === stance;
+        return (
+          <button
+            key={`setup-popover-stance-${stance}`}
+            type="button"
+            onClick={() => onSelectStance(stance)}
+            className={`min-h-10 rounded-xl border px-2 py-1.5 text-xs font-black ${
+              selected
+                ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-1 ring-cyan-200/70"
+                : "border-slate-700 bg-slate-900 text-slate-300"
+            }`}
+            aria-pressed={selected}
+          >
+            <span aria-hidden="true">{selected ? "✓ " : ""}</span>
+            {stance === "attack" ? "攻撃" : "防御"}
+          </button>
+        );
+      })}
+    </div>
+
+    <div className="mt-2 grid grid-cols-2 gap-1.5">
+      <button
+        type="button"
+        onClick={onClear}
+        disabled={selectedPlacement === undefined || isPending}
+        className="min-h-10 rounded-xl border border-rose-300/50 bg-rose-500/10 px-2 py-2 text-xs font-bold text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        配置解除
+      </button>
+      <button
+        type="button"
+        onClick={onPlace}
+        disabled={selectedUnitId === null || selectedStance === null || isPending}
+        className="min-h-10 rounded-xl border border-emerald-300 bg-emerald-400/20 px-2 py-2 text-xs font-black text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        配置する
+      </button>
+    </div>
+  </div>
+);
+
 const EventLog = ({ events }: { events: readonly LocalDebugEventLogEntry[] }) => (
   <details className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
     <summary className="cursor-pointer list-none text-base font-bold text-white focus:outline-none focus:ring-2 focus:ring-cyan-300">
@@ -423,7 +560,7 @@ export default function LocalMatchDebugClient({
   const [nextStance, setNextStance] = useState<Stance>("attack");
   const [setupSelectedCell, setSetupSelectedCell] = useState<SetupSelectedCell | null>(null);
   const [setupSelectedUnitId, setSetupSelectedUnitId] = useState<string | null>(null);
-  const [setupSelectedStance, setSetupSelectedStance] = useState<Stance>("attack");
+  const [setupSelectedStance, setSetupSelectedStance] = useState<Stance | null>(null);
   const [setupPlacements, setSetupPlacements] = useState<readonly SetupDraftPlacement[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -484,15 +621,26 @@ export default function LocalMatchDebugClient({
   const selectedSetupPlacement = selectedSetupCoordinateKey === null
     ? undefined
     : setupPlacementByCoordinate.get(selectedSetupCoordinateKey);
-  const selectedSetupUnit = setupSelectedUnitId === null
-    ? null
-    : ownSetupUnits.find((unit) => unit.unitId === setupSelectedUnitId) ?? null;
   const firstPlayer = view.players.find((player) => player.side === "south");
   const secondPlayer = view.players.find((player) => player.side === "north");
+  const displayPlayers = [firstPlayer, secondPlayer].filter(
+    (player): player is MatchPlayerState => player !== undefined,
+  );
+  const activeSetupSide = isSetupPhase ? viewerSide : currentPlayer?.side;
   const firstPlayerSubmitted = firstPlayer?.setupSubmitted ?? false;
   const secondPlayerSubmitted = secondPlayer?.setupSubmitted ?? false;
   const setupIsHandoff = isSetupPhase && viewerSide === "south" && firstPlayerSubmitted && !secondPlayerSubmitted;
   const setupLockedForPlayer2 = isSetupPhase && viewerSide === "north" && !firstPlayerSubmitted;
+  const flagCoordinateKeys = useMemo(() => {
+    const coordinates = view.players.flatMap((player) => {
+      const result = getFlagAreaCoordinates({
+        side: player.side,
+        boardSize: view.boardSize,
+      });
+      return result.ok ? [...result.value] : [];
+    });
+    return new Set(coordinates.map(coordinateKey));
+  }, [view.boardSize, view.players]);
 
   const resetSelection = () => {
     setSelectedUnitId(null);
@@ -506,7 +654,7 @@ export default function LocalMatchDebugClient({
   const resetSetupSelection = () => {
     setSetupSelectedCell(null);
     setSetupSelectedUnitId(null);
-    setSetupSelectedStance("attack");
+    setSetupSelectedStance(null);
   };
 
   const resetSetupDraft = () => {
@@ -610,7 +758,7 @@ export default function LocalMatchDebugClient({
   };
 
   const placeSetupSelection = () => {
-    if (setupSelectedCell === null || setupSelectedUnitId === null || setupSubmitted || isPending) return;
+    if (setupSelectedCell === null || setupSelectedUnitId === null || setupSelectedStance === null || setupSubmitted || isPending) return;
     const selectedKey = coordinateKey(setupSelectedCell.position);
     if (!setupLegalCoordinateKeys.has(selectedKey)) return;
 
@@ -629,11 +777,13 @@ export default function LocalMatchDebugClient({
       ),
       { unitId: setupSelectedUnitId, position: setupSelectedCell.position, stance: setupSelectedStance },
     ]);
+    resetSetupSelection();
   };
 
   const clearSelectedSetupPlacement = () => {
     if (selectedSetupPlacement === undefined) return;
     clearSetupPlacement(selectedSetupPlacement.unitId);
+    setSetupSelectedStance(null);
   };
 
   const submitSetupPlacement = () => {
@@ -756,7 +906,7 @@ export default function LocalMatchDebugClient({
       const draftAtCell = setupPlacementByCoordinate.get(destinationKey);
       setSetupSelectedCell({ position: destination });
       setSetupSelectedUnitId(draftAtCell?.unitId ?? null);
-      setSetupSelectedStance(draftAtCell?.stance ?? "attack");
+      setSetupSelectedStance(draftAtCell?.stance ?? null);
       return;
     }
 
@@ -820,8 +970,14 @@ export default function LocalMatchDebugClient({
             <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">{viewerSide}視点</span>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            {view.players.map((player) => (
-              <FlagPanel key={player.id} view={view} player={player} compact />
+            {displayPlayers.map((player) => (
+              <FlagPanel
+                key={player.id}
+                view={view}
+                player={player}
+                compact
+                active={isSetupPhase && player.side === activeSetupSide}
+              />
             ))}
           </div>
         </header>
@@ -967,103 +1123,26 @@ export default function LocalMatchDebugClient({
                 </button>
               </div>
             ) : (
-              <div className="mt-4 grid gap-3">
-                <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3 text-xs text-slate-200">
-                  <div className="grid grid-cols-2 gap-2">
-                    <span>選択マス: <strong className="text-white">{setupSelectedCell === null ? "—" : toCoordinateLabel(setupSelectedCell.position)}</strong></span>
-                    <span>選択カード: <strong className="text-white">{selectedSetupUnit?.revealed ? selectedSetupUnit.card.cardName : "—"}</strong></span>
-                  </div>
-                  <p className="mt-2 text-slate-400">残りカード名: {setupAutoReserveUnits.map((unit) => unit.revealed ? unit.card.cardName : compactId(unit.unitId)).join(" / ") || "—"}</p>
+              <div className="mt-3 grid gap-2">
+                <div className="grid grid-cols-2 gap-2 text-xs text-slate-200">
+                  <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
+                    配置 <strong className="text-white">{setupPlacements.length}/6</strong>
+                  </span>
+                  <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
+                    予備 <strong className="text-white">{setupAutoReserveUnits.length}/2</strong>
+                  </span>
                 </div>
-
-                {setupSelectedCell !== null ? (
-                  <div className="rounded-3xl border border-cyan-300/30 bg-slate-950/90 p-3 shadow-xl shadow-cyan-950/20">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-base font-black text-white">{toCoordinateLabel(setupSelectedCell.position)}へ配置</h3>
-                        <p className="mt-1 text-xs text-slate-400">未配置カード、またはこのマスに配置済みのカードだけを選べます。</p>
-                      </div>
-                      <button type="button" onClick={resetSetupSelection} className="rounded-xl border border-slate-600 px-3 py-2 text-xs font-bold text-slate-200">キャンセル</button>
-                    </div>
-
-                    <div className="mt-3 grid max-h-48 min-w-0 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
-                      {ownSetupUnits.map((unit) => {
-                        const placement = setupPlacementByUnitId.get(unit.unitId);
-                        const placedAtSelectedCell = placement !== undefined && selectedSetupCoordinateKey !== null && coordinateKey(placement.position) === selectedSetupCoordinateKey;
-                        const disabled = placement !== undefined && !placedAtSelectedCell;
-                        const selected = setupSelectedUnitId === unit.unitId;
-                        return (
-                          <button
-                            key={`setup-card-${unit.unitId}`}
-                            type="button"
-                            onClick={() => selectSetupUnit(unit.unitId)}
-                            disabled={disabled || isPending}
-                            className={`min-h-12 w-full min-w-0 rounded-2xl border px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
-                              selected
-                                ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/60"
-                                : disabled
-                                  ? "border-slate-800 bg-slate-950/50 text-slate-500"
-                                  : "border-slate-700 bg-slate-900 text-slate-200"
-                            }`}
-                          >
-                            <span className="block break-words font-black text-white">{unit.revealed ? unit.card.cardName : compactId(unit.unitId)}</span>
-                            <span className="text-slate-400">{placement === undefined ? "未配置" : placedAtSelectedCell ? "このマスに配置済み" : `${toCoordinateLabel(placement.position)}に配置済み`}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      {(["attack", "defense"] as const).map((stance) => (
-                        <button
-                          key={`setup-stance-${stance}`}
-                          type="button"
-                          onClick={() => setSetupSelectedStance(stance)}
-                          className={`min-h-12 rounded-2xl border px-3 py-2 text-sm font-black ${
-                            setupSelectedStance === stance
-                              ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/60"
-                              : "border-slate-700 bg-slate-900 text-slate-300"
-                          }`}
-                        >
-                          {stanceLabel(stance)} {stance}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={clearSelectedSetupPlacement}
-                        disabled={selectedSetupPlacement === undefined || isPending}
-                        className="min-h-12 rounded-2xl border border-rose-300/50 bg-rose-500/10 px-3 py-3 text-sm font-bold text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        配置解除
-                      </button>
-                      <button
-                        type="button"
-                        onClick={placeSetupSelection}
-                        disabled={setupSelectedUnitId === null || isPending}
-                        className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-black text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        配置決定
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3 text-sm text-slate-300">盤面の「初」マスをタップするとカード選択UIが開きます。</p>
-                )}
-
+                <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2 text-xs leading-5 text-slate-300">
+                  盤面の「初」マスをタップして、その場の小型メニューでカード・攻撃/防御を選びます。旗マスには配置できません。
+                </p>
                 <button
                   type="button"
                   disabled={setupSubmitted || isPending || setupPlacements.length !== 6 || setupAutoReserveUnits.length !== 2}
                   onClick={submitSetupPlacement}
-                  className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-black text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="min-h-11 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-2 text-sm font-black text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   配置を確定
                 </button>
-                {!setupSubmitted && setupPlacements.length !== 6 ? (
-                  <p className="text-xs text-slate-400">6体配置すると残り2体が自動的にリザーバー予定になり、確定できます。</p>
-                ) : null}
               </div>
             )}
           </section>
@@ -1092,35 +1171,41 @@ export default function LocalMatchDebugClient({
                 <span key={`col-${column}`}>c{column}</span>
               ))}
             </div>
-            {boardRows.map((row) => (
+            {boardRows.map((row, rowDisplayIndex) => (
               <div key={`row-${row.rowIndex}`} className="contents">
                 <div className="flex items-center justify-center text-[0.55rem] font-bold text-slate-500">r{row.rowIndex}</div>
                 <div className="grid w-full grid-cols-8 gap-1" aria-label="8 by 8 local debug board">
-                  {row.cells.map((cell) => {
+                  {row.cells.map((cell, cellDisplayIndex) => {
                     const setupDraft = setupPlacements.find((placement) => coordinateKey(placement.position) === coordinateKey(cell.coordinate));
                     const setupDraftUnit = setupDraft === undefined ? null : ownSetupUnits.find((unit) => unit.unitId === setupDraft.unitId) ?? null;
                     const unit = isSetupPhase ? setupDraftUnit : cell.unit;
                     const coordinate = coordinateKey(cell.coordinate);
+                    const isFlagCell = flagCoordinateKeys.has(coordinate);
                     const setupLegal = isSetupPhase && !setupSubmitted && !setupLockedForPlayer2 && setupLegalCoordinateKeys.has(coordinate);
                     const setupCellSelected = selectedSetupCoordinateKey === coordinate;
+                    const showSetupMenu = setupCellSelected && setupLegal;
+                    const popoverHorizontalClass = cellDisplayIndex <= 2 ? "left-0" : cellDisplayIndex >= 5 ? "right-0" : "left-1/2 -translate-x-1/2";
+                    const popoverVerticalClass = rowDisplayIndex >= 4 ? "bottom-[calc(100%+0.35rem)]" : "top-[calc(100%+0.35rem)]";
                     const selected = unit?.unitId === selectedUnitId || setupCellSelected;
                     const candidate = candidatesByCoordinate.get(coordinate);
                     const destinationSelected = selectedDestination !== null && coordinateKey(selectedDestination.destination) === coordinate;
-                    const cellLabel = `${toCoordinateLabel(cell.coordinate)}${candidate === undefined ? "" : ` ${candidateLabel(candidate)}`}${unit === null ? " empty" : ` ${isOwnUnit(view, unit) ? "own" : "enemy"} ${unit.revealed ? "revealed" : "hidden"}`}`;
+                    const cellLabel = `${toCoordinateLabel(cell.coordinate)}${isFlagCell ? " 旗 配置不可" : ""}${candidate === undefined ? "" : ` ${candidateLabel(candidate)}`}${unit === null ? " empty" : ` ${isOwnUnit(view, unit) ? "own" : "enemy"} ${unit.revealed ? "revealed" : "hidden"}`}`;
                     return (
+                      <div key={coordinate} className="relative min-w-0">
                       <button
-                        key={coordinate}
                         type="button"
                         onClick={() => handleCellClick(unit, cell.coordinate)}
                         disabled={isFinished}
-                        className={`relative aspect-square min-w-0 rounded-lg border p-0.5 text-[0.55rem] shadow-lg transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-70 sm:rounded-xl ${
+                        className={`relative aspect-square w-full min-w-0 rounded-lg border p-0.5 text-[0.55rem] shadow-lg transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-70 sm:rounded-xl ${
                           destinationSelected || setupCellSelected
                             ? "border-white bg-white/20 ring-2 ring-white"
                             : selected
                               ? "border-white bg-white/10 ring-2 ring-white/80"
                               : setupLegal
                                 ? "border-cyan-200 bg-cyan-400/15 ring-1 ring-cyan-200/60"
-                                : candidateClasses(candidate)
+                                : isFlagCell
+                                  ? "border-amber-200/70 bg-amber-400/15 text-amber-50"
+                                  : candidateClasses(candidate)
                         }`}
                         aria-label={cellLabel}
                       >
@@ -1135,12 +1220,35 @@ export default function LocalMatchDebugClient({
                         {setupLegal ? (
                           <span className="absolute right-0.5 top-0.5 z-20 rounded-full border border-cyan-200 bg-cyan-400/25 px-1 text-[0.55rem] font-black text-cyan-50">初</span>
                         ) : null}
+                        {isFlagCell ? (
+                          <span className="absolute inset-x-1 bottom-0.5 z-10 rounded border border-amber-200/60 bg-amber-400/20 px-0.5 text-center text-[0.5rem] font-black text-amber-50">⚑旗</span>
+                        ) : null}
                         {unit === null ? (
                           <span className="flex h-full items-center justify-center text-[0.6rem] text-slate-700">·</span>
                         ) : (
                           <UnitPill view={view} unit={unit} selected={selected} />
                         )}
                       </button>
+                      {showSetupMenu ? (
+                        <div className={`absolute ${popoverHorizontalClass} ${popoverVerticalClass} z-50 w-64 max-w-[calc(100vw-1.5rem)]`}>
+                          <SetupPlacementMenu
+                            coordinate={cell.coordinate}
+                            units={ownSetupUnits}
+                            placementByUnitId={setupPlacementByUnitId}
+                            selectedCoordinateKey={coordinate}
+                            selectedUnitId={setupSelectedUnitId}
+                            selectedStance={setupSelectedStance}
+                            selectedPlacement={selectedSetupPlacement}
+                            isPending={isPending}
+                            onSelectUnit={selectSetupUnit}
+                            onSelectStance={setSetupSelectedStance}
+                            onPlace={placeSetupSelection}
+                            onClear={clearSelectedSetupPlacement}
+                            onCancel={resetSetupSelection}
+                          />
+                        </div>
+                      ) : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -1225,9 +1333,9 @@ export default function LocalMatchDebugClient({
 
         {!isSetupPhase ? (
           <section className="grid gap-3 lg:grid-cols-2">
-            {view.players.map((player) => (
+            {displayPlayers.map((player) => (
               <div key={player.id} className="grid gap-3">
-                <FlagPanel view={view} player={player} />
+                <FlagPanel view={view} player={player} active={isSetupPhase && player.side === activeSetupSide} />
                 <ReservePanel
                   view={view}
                   player={player}
