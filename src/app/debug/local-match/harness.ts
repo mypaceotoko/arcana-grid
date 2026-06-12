@@ -196,7 +196,7 @@ const sanitizePlayerMatchView = (view: PlayerMatchView): PlayerMatchView => ({
 
       return {
         ...unit,
-        position: null,
+        position: unit.position === null ? null : cloneCoordinate(unit.position),
         status: view.phase === "setup" ? "reserve" : unit.status,
       };
     }),

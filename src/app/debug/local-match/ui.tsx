@@ -15,7 +15,6 @@ import type {
 import {
   buildBoardRows,
   describeUnit,
-  getPlayerSide,
   getReserveUnitsForPlayer,
   getViewerSide,
   isOwnUnit,
@@ -51,8 +50,7 @@ type BoardCandidate =
   | (LocalDebugReserveCandidate & { kind: "deploy" })
   | LocalDebugFlagAttackCandidate;
 
-const formatPlayerLabel = (player: MatchPlayerState): string =>
-  `${player.side} / ${player.id}`;
+type CandidateKind = BoardCandidate["kind"];
 
 const compactId = (id: string): string => id.replace("local-debug-", "");
 
@@ -76,14 +74,23 @@ const getUnitClasses = (view: PlayerMatchView, unit: UnitView): string => {
   const own = isOwnUnit(view, unit);
   if (!unit.revealed) {
     return own
-      ? "border-cyan-300/70 bg-cyan-400/15 text-cyan-100"
-      : "border-fuchsia-300/70 bg-fuchsia-500/15 text-fuchsia-100";
+      ? "border-cyan-200 bg-cyan-300/20 text-cyan-50"
+      : "border-fuchsia-200 bg-fuchsia-400/20 text-fuchsia-50";
   }
 
   return own
-    ? "border-emerald-300/80 bg-emerald-400/20 text-emerald-50"
-    : "border-amber-300/80 bg-amber-400/20 text-amber-50";
+    ? "border-emerald-200 bg-emerald-400/25 text-emerald-50"
+    : "border-amber-200 bg-amber-400/25 text-amber-50";
 };
+
+const stanceLabel = (stance: Stance | undefined): string => {
+  if (stance === "attack") return "攻";
+  if (stance === "defense") return "守";
+  return "?";
+};
+
+const stanceFullLabel = (stance: Stance): string =>
+  stance === "attack" ? "attack / 攻撃表示" : "defense / 防御表示";
 
 const candidateLabel = (candidate: BoardCandidate): string => {
   switch (candidate.kind) {
@@ -114,17 +121,50 @@ const candidateMarker = (candidate: BoardCandidate): string => {
 const candidateClasses = (candidate: BoardCandidate | undefined): string => {
   switch (candidate?.kind) {
     case "move":
-      return "border-cyan-300 bg-cyan-400/15";
+      return "border-cyan-300 bg-cyan-400/15 shadow-cyan-950/40";
     case "engage":
-      return "border-rose-300 bg-rose-500/20";
+      return "border-rose-300 bg-rose-500/20 shadow-rose-950/40";
     case "deploy":
-      return "border-emerald-300 bg-emerald-400/20";
+      return "border-emerald-300 bg-emerald-400/20 shadow-emerald-950/40";
     case "flag_attack":
-      return "border-amber-200 bg-amber-400/25";
+      return "border-amber-200 bg-amber-400/25 shadow-amber-950/40";
     default:
-      return "border-slate-700 bg-slate-950/70 hover:border-slate-500";
+      return "border-slate-700 bg-slate-950/80 hover:border-slate-500";
   }
 };
+
+const candidateToneClasses: Record<CandidateKind, string> = {
+  move: "border-cyan-300/70 bg-cyan-400/15 text-cyan-50",
+  engage: "border-rose-300/70 bg-rose-500/15 text-rose-50",
+  deploy: "border-emerald-300/70 bg-emerald-400/15 text-emerald-50",
+  flag_attack: "border-amber-200/80 bg-amber-400/15 text-amber-50",
+};
+
+const countCandidates = (
+  candidates: readonly BoardCandidate[],
+  kind: CandidateKind,
+): number => candidates.filter((candidate) => candidate.kind === kind).length;
+
+const flagSegments = (player: MatchPlayerState): boolean[] =>
+  Array.from({ length: player.flag.maxDamage }, (_, index) => index < player.flag.damage);
+
+const selectedActionLabel = (actionMode: ActionMode): string => {
+  switch (actionMode) {
+    case "move":
+      return "移動/戦闘";
+    case "deploy":
+      return "リザーバー投入";
+    case "flag_attack":
+      return "旗攻撃";
+    case "concede":
+      return "投了";
+    case "none":
+      return "未選択";
+  }
+};
+
+const formatPlayerLabel = (view: PlayerMatchView, player: MatchPlayerState): string =>
+  `${player.side}${player.id === view.viewerId ? " / 自分" : " / 相手"}`;
 
 const UnitPill = ({
   view,
@@ -134,30 +174,72 @@ const UnitPill = ({
   view: PlayerMatchView;
   unit: UnitView;
   selected: boolean;
-}) => (
-  <span
-    className={`flex h-full min-h-8 w-full items-center justify-center rounded-xl border px-1 text-[0.62rem] font-bold shadow-inner ${getUnitClasses(
-      view,
-      unit,
-    )} ${selected ? "ring-2 ring-white" : ""}`}
-  >
-    {getUnitToken(unit)}
-  </span>
+}) => {
+  const revealedLabel = unit.revealed ? "公開" : "伏せ";
+  const ownerLabel = isOwnUnit(view, unit) ? "自軍" : "敵軍";
+
+  return (
+    <span
+      className={`relative flex h-full min-h-8 w-full flex-col items-center justify-center rounded-lg border px-0.5 text-[0.6rem] font-black leading-none shadow-inner sm:rounded-xl ${getUnitClasses(
+        view,
+        unit,
+      )} ${selected ? "ring-2 ring-white ring-offset-1 ring-offset-slate-950" : ""}`}
+      aria-label={`${ownerLabel} ${revealedLabel} unit ${compactId(unit.unitId)}`}
+    >
+      <span className="text-[0.78rem] sm:text-sm">{getUnitToken(unit)}</span>
+      <span className="mt-0.5 rounded bg-slate-950/70 px-1 py-0.5 text-[0.48rem] font-bold leading-none text-slate-100">
+        {unit.revealed ? stanceLabel(unit.stance) : "伏"}
+      </span>
+    </span>
+  );
+};
+
+const FlagDamageMeter = ({ player }: { player: MatchPlayerState }) => (
+  <div className="flex items-center gap-1" aria-label={`${player.side} flag damage ${player.flag.damage} of ${player.flag.maxDamage}`}>
+    {flagSegments(player).map((damaged, index) => (
+      <span
+        key={`${player.id}-flag-${index}`}
+        className={`h-2.5 flex-1 rounded-full border ${
+          damaged
+            ? "border-rose-200 bg-rose-400 shadow-sm shadow-rose-900/50"
+            : "border-slate-600 bg-slate-800"
+        }`}
+      />
+    ))}
+  </div>
 );
 
-const FlagPanel = ({ player }: { player: MatchPlayerState }) => (
-  <div className="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-3">
-    <div className="flex items-start justify-between gap-3">
+const FlagPanel = ({
+  view,
+  player,
+  compact = false,
+}: {
+  view: PlayerMatchView;
+  player: MatchPlayerState;
+  compact?: boolean;
+}) => (
+  <div className="rounded-2xl border border-slate-700/80 bg-slate-950/70 p-3">
+    <div className="flex items-center justify-between gap-3">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+        <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-slate-400">
           Flag
         </p>
-        <p className="mt-1 text-sm font-bold text-white">{player.side}</p>
+        <p className="mt-0.5 text-sm font-bold text-white">
+          {formatPlayerLabel(view, player)}
+        </p>
       </div>
-      <div className="rounded-full border border-rose-300/40 bg-rose-400/10 px-2 py-1 text-xs font-bold text-rose-100">
-        damage {player.flag.damage} / {player.flag.maxDamage}
+      <div className="min-w-20 text-right">
+        <p className="text-xs font-bold text-rose-100">
+          {player.flag.damage} / {player.flag.maxDamage}
+        </p>
+        <FlagDamageMeter player={player} />
       </div>
     </div>
+    {!compact ? (
+      <p className="mt-2 text-[0.68rem] leading-4 text-slate-400">
+        3段階の旗ダメージ。満了で旗破壊勝利です。
+      </p>
+    ) : null}
   </div>
 );
 
@@ -184,10 +266,10 @@ const ReservePanel = ({
           Reserve
         </p>
         <span className="text-xs text-slate-400">
-          {player.side} / {ownsPanel ? "自分" : "相手（選択不可）"}
+          {ownsPanel ? "自分のみ選択可" : "相手（秘匿）"}
         </span>
       </div>
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-3 flex snap-x gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {reserves.length === 0 ? (
           <span className="text-xs text-slate-500">なし</span>
         ) : (
@@ -202,12 +284,12 @@ const ReservePanel = ({
                   if (selectable) onSelect(unit.unitId);
                 }}
                 disabled={!selectable}
-                className={`rounded-xl border px-3 py-2 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-50 ${
+                className={`min-h-12 min-w-32 snap-start rounded-2xl border px-3 py-2 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-50 ${
                   selected
-                    ? "border-emerald-300 bg-emerald-400/20 text-emerald-50"
+                    ? "border-emerald-200 bg-emerald-400/20 text-emerald-50 ring-2 ring-emerald-200/70"
                     : "border-slate-600 bg-slate-950/70 text-slate-100 hover:border-cyan-300"
                 }`}
-                aria-label={`${ownsPanel ? "own" : "opponent"} reserve ${compactId(unit.unitId)}`}
+                aria-label={`${ownsPanel ? "own" : "opponent hidden"} reserve ${compactId(unit.unitId)}`}
               >
                 <span className="font-bold">
                   {unit.revealed ? unit.card.cardName : "伏せカード"}
@@ -226,9 +308,9 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
   if (unit === null) {
     return (
       <section className="rounded-3xl border border-slate-700/80 bg-slate-900/80 p-4">
-        <h2 className="text-lg font-bold text-white">選択ユニット</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-400">
-          自分の盤面ユニットでMOVE_UNIT/ATTACK_FLAG、自分のリザーバーでDEPLOY_RESERVEをサーバーハーネスへ問い合わせます。
+        <h2 className="text-base font-bold text-white">選択中カード</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-400">
+          自軍ユニットまたはリザーバーを選ぶと、候補とカード情報をここに整理して表示します。
         </p>
       </section>
     );
@@ -240,7 +322,7 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
     <section className="rounded-3xl border border-cyan-300/30 bg-slate-900/90 p-4 shadow-xl shadow-cyan-950/20">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-white">選択ユニット</h2>
+          <h2 className="text-base font-bold text-white">選択中カード</h2>
           <p className="mt-1 text-xs text-slate-400">{compactId(detail.unitId)}</p>
         </div>
         <span className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1 text-xs font-bold text-cyan-100">
@@ -268,9 +350,9 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
         ) : null}
         {detail.cardName !== undefined ? (
           <>
-            <div className="col-span-2">
+            <div className="col-span-2 rounded-2xl border border-slate-700 bg-slate-950/60 p-3">
               <dt className="text-xs text-slate-500">Card</dt>
-              <dd className="text-slate-100">{detail.cardName}</dd>
+              <dd className="text-base font-bold text-slate-100">{detail.cardName}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-500">Stance</dt>
@@ -278,7 +360,9 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
             </div>
             <div>
               <dt className="text-xs text-slate-500">Defense</dt>
-              <dd className="text-slate-100">{detail.currentDefense}</dd>
+              <dd className="font-bold text-slate-100">
+                {detail.currentDefense} / {detail.baseDefense}
+              </dd>
             </div>
             <div>
               <dt className="text-xs text-slate-500">ATK / DEF</dt>
@@ -298,12 +382,14 @@ const DetailPanel = ({ unit }: { unit: UnitView | null }) => {
 };
 
 const EventLog = ({ events }: { events: readonly LocalDebugEventLogEntry[] }) => (
-  <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
-    <h2 className="text-lg font-bold text-white">最新イベント</h2>
+  <details className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
+    <summary className="cursor-pointer list-none text-base font-bold text-white focus:outline-none focus:ring-2 focus:ring-cyan-300">
+      最新イベント <span className="text-xs font-normal text-slate-400">({events.length})</span>
+    </summary>
     {events.length === 0 ? (
       <p className="mt-3 text-sm text-slate-400">まだイベントはありません。</p>
     ) : (
-      <ol className="mt-3 grid gap-2 text-xs text-slate-200">
+      <ol className="mt-3 max-h-48 space-y-2 overflow-y-auto pr-1 text-xs text-slate-200">
         {events.map((event) => (
           <li key={event.index} className="rounded-2xl bg-slate-950/70 p-3">
             <span className="font-bold text-cyan-200">
@@ -314,7 +400,7 @@ const EventLog = ({ events }: { events: readonly LocalDebugEventLogEntry[] }) =>
         ))}
       </ol>
     )}
-  </section>
+  </details>
 );
 
 export default function LocalMatchDebugClient({
@@ -378,6 +464,10 @@ export default function LocalMatchDebugClient({
     () => new Map(candidates.map((candidate) => [coordinateKey(candidate.destination), candidate])),
     [candidates],
   );
+  const boardColumnLabels = boardRows[0]?.cells.map((cell) => cell.coordinate.col) ?? [];
+  const selectedSetupUnit = setupSelectedUnitId === null
+    ? null
+    : ownSetupUnits.find((unit) => unit.unitId === setupSelectedUnitId) ?? null;
 
   const resetSelection = () => {
     setSelectedUnitId(null);
@@ -575,6 +665,7 @@ export default function LocalMatchDebugClient({
       viewerSide,
       unitId: selectedUnitId,
       nextStance,
+      stance: nextStance,
       expectedStateVersion: view.stateVersion,
       actionId: makeActionId(),
     };
@@ -664,7 +755,8 @@ export default function LocalMatchDebugClient({
       return "CONCEDE_MATCH: この対戦を投了し、相手を勝者にします。";
     }
     if (selectedUnitId === null || selectedDestination === null) {
-      return "候補マスを選択してください。";
+      if (!isViewerTurn && view.phase === "active") return "相手の手番です。投了以外の操作はできません。";
+      return "ユニットを選び、強調表示された候補マスをタップしてください。";
     }
 
     return `${selectedDestination.kind === "flag_attack" ? "ATTACK_FLAG" : selectedDestination.kind === "deploy" ? "DEPLOY_RESERVE" : "MOVE_UNIT"}: ${compactId(selectedUnitId)} → ${toCoordinateLabel(selectedDestination.destination)} (${candidateLabel(selectedDestination)}) / ${nextStance}表示`;
@@ -672,35 +764,42 @@ export default function LocalMatchDebugClient({
 
   return (
     <main className="min-h-dvh overflow-x-hidden bg-slate-950 text-slate-100">
-      <div className="mx-auto flex w-full max-w-md flex-col gap-4 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]">
-        <header className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4 shadow-2xl shadow-black/30">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-300/80">
-            Debug / Local Match
-          </p>
-          <h1 className="mt-2 text-2xl font-bold tracking-[0.08em] text-white">
-            Local Actions Debug
-          </h1>
-          <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-300">
-            <span>phase: {view.phase}</span>
-            <span>turn: {view.turnNumber}</span>
-            <span>stateVersion: {view.stateVersion}</span>
-            <span>active: {currentPlayer?.side ?? "—"}</span>
+      <div className="mx-auto flex w-full max-w-md flex-col gap-3 px-2 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:max-w-3xl sm:px-4 lg:max-w-5xl">
+        <header className="sticky top-0 z-30 rounded-b-3xl border border-slate-800 bg-slate-950/95 p-3 shadow-2xl shadow-black/30 backdrop-blur sm:rounded-3xl">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[0.62rem] font-semibold uppercase tracking-[0.24em] text-cyan-300/80">
+                Debug / Local Match
+              </p>
+              <h1 className="mt-1 truncate text-xl font-bold tracking-[0.04em] text-white sm:text-2xl">
+                Local Match
+              </h1>
+            </div>
+            <div className={`rounded-2xl border px-3 py-2 text-right text-xs font-bold ${isViewerTurn ? "border-emerald-300/60 bg-emerald-400/15 text-emerald-50" : "border-slate-700 bg-slate-900 text-slate-300"}`}>
+              <span className="block text-[0.58rem] uppercase tracking-[0.18em] text-slate-400">Turn</span>
+              {currentPlayer?.side ?? "—"}
+            </div>
           </div>
-          <p className="mt-3 text-xs leading-5 text-slate-400">
-            {data.stateStorageNote}
-          </p>
+          <div className="mt-3 grid grid-cols-4 gap-1.5 text-center text-[0.66rem] text-slate-300">
+            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">{view.phase}</span>
+            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">T{view.turnNumber}</span>
+            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">v{view.stateVersion}</span>
+            <span className="rounded-xl border border-slate-700 bg-slate-900/80 px-2 py-1.5">{viewerSide}視点</span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {view.players.map((player) => (
+              <FlagPanel key={player.id} view={view} player={player} compact />
+            ))}
+          </div>
         </header>
 
-        <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
-          <h2 className="text-lg font-bold text-white">勝敗結果</h2>
-          {view.phase === "finished" ? (
-            <div className="mt-3 rounded-2xl border border-amber-300/40 bg-amber-400/10 p-3 text-sm text-amber-50">
-              winner: {winner?.side ?? "—"} / reason: {view.winReason ?? "—"}
-            </div>
-          ) : (
-            <p className="mt-3 text-sm text-slate-400">対戦中です。</p>
-          )}
-        </section>
+        {view.phase === "finished" ? (
+          <section className="rounded-3xl border border-amber-200/60 bg-amber-400/15 p-4 text-amber-50 shadow-xl shadow-amber-950/30" role="status">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-100/80">Result</p>
+            <h2 className="mt-1 text-2xl font-black">{winner?.side ?? "—"} 勝利</h2>
+            <p className="mt-2 text-sm">reason: {view.winReason ?? "—"}</p>
+          </section>
+        ) : null}
 
         <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-3">
           <div className="grid grid-cols-2 gap-2">
@@ -714,213 +813,252 @@ export default function LocalMatchDebugClient({
                     resetSelection();
                     refreshView(option.side);
                   }}
-                  className={`rounded-2xl border px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300 ${
+                  className={`min-h-12 rounded-2xl border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300 ${
                     selected
                       ? "border-cyan-300 bg-cyan-300/15 text-cyan-50"
                       : "border-slate-700 bg-slate-950/60 text-slate-300"
                   }`}
                 >
-                  <span className="block text-xs uppercase tracking-[0.2em] text-slate-400">
+                  <span className="block text-[0.6rem] uppercase tracking-[0.2em] text-slate-400">
                     viewer
                   </span>
-                  <span className="mt-1 block font-bold">{option.side}</span>
+                  <span className="mt-0.5 block font-bold">{option.side}</span>
                 </Link>
               );
             })}
           </div>
           <p className="mt-3 text-xs leading-5 text-slate-400">
-            現在の視点: {viewerSide}。{isFinished ? "勝敗確定後のため盤面操作は停止しています。" : isViewerTurn ? "自分の手番です。" : "相手の手番です。投了のみ実行できます。"}
+            {isFinished ? "勝敗確定後のため盤面操作は停止しています。" : isViewerTurn ? "自分の手番です。盤面の自軍ユニットかリザーバーを選択してください。" : "相手の手番です。投了のみ実行できます。"}
           </p>
         </section>
 
         {errorMessage !== null ? (
-          <div className="rounded-2xl border border-rose-300/40 bg-rose-500/10 p-3 text-sm text-rose-100" role="alert">
-            {errorMessage}
+          <div className="rounded-2xl border border-rose-300/50 bg-rose-500/15 p-3 text-sm font-semibold text-rose-100" role="alert">
+            操作できません: {errorMessage}
           </div>
         ) : null}
 
         {isPending ? (
-          <div className="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 p-3 text-sm text-cyan-100">
-            処理中…
+          <div className="rounded-2xl border border-cyan-300/40 bg-cyan-300/10 p-3 text-sm font-semibold text-cyan-100" role="status">
+            処理中… サーバーハーネスの応答を待っています。
           </div>
         ) : null}
 
         {isSetupPhase ? (
-          <section className="rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-4">
-            <h2 className="text-lg font-bold text-cyan-50">初期配置</h2>
+          <section className="rounded-3xl border border-cyan-300/30 bg-cyan-400/10 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-cyan-50">初期配置</h2>
+                <p className="mt-1 text-xs text-cyan-100/80">カードを選び、盤面の「初」マスへ6体配置します。</p>
+              </div>
+              <div className="grid min-w-24 grid-cols-2 gap-1 text-center text-[0.65rem] font-bold">
+                <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">配置 {setupPlacements.length}/6</span>
+                <span className="rounded-xl border border-slate-700 bg-slate-950/70 p-1">予備 {setupReserveUnitIds.length}/2</span>
+              </div>
+            </div>
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-200">
               <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">自分: {setupSubmitted ? "準備完了" : "未提出"}</span>
               <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">相手: {opponentSetupSubmitted ? "準備完了" : "未完了"}</span>
-              <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">配置: {setupPlacements.length} / 6</span>
-              <span className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">リザーブ: {setupReserveUnitIds.length} / 2</span>
             </div>
             {setupSubmitted ? (
               <p className="mt-3 rounded-2xl border border-emerald-300/40 bg-emerald-400/10 p-3 text-sm text-emerald-50">
                 提出済みです。再提出はできません。相手の具体的な配置・リザーバーは表示しません。
               </p>
-            ) : null}
-            <p className="mt-3 text-xs leading-5 text-cyan-100/80">
-              自分の8体から6体を自陣2列の合法マスへ仮配置し、2体をリザーバー予定にしてください。旗エリアと重複マスはサーバーreducerでも再検証されます。
-            </p>
-            <div className="mt-4 grid gap-3">
-              <div>
-                <h3 className="text-sm font-bold text-white">未配置カード一覧</h3>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {ownSetupUnits
-                    .filter((unit) => !setupPlacementByUnitId.has(unit.unitId) && !setupReserveIdSet.has(unit.unitId))
-                    .map((unit) => (
-                      <button
-                        key={unit.unitId}
-                        type="button"
-                        disabled={setupSubmitted || isPending}
-                        onClick={() => selectSetupUnit(unit.unitId)}
-                        className={`rounded-2xl border px-3 py-2 text-left text-xs ${setupSelectedUnitId === unit.unitId ? "border-cyan-200 bg-cyan-300/20" : "border-slate-700 bg-slate-950/80"}`}
-                      >
-                        <span className="block font-bold text-white">{unit.revealed ? unit.card.cardName : compactId(unit.unitId)}</span>
-                        <span className="text-slate-400">{compactId(unit.unitId)}</span>
-                      </button>
-                    ))}
+            ) : (
+              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
+                <div>
+                  <h3 className="text-sm font-bold text-white">自分のカード</h3>
+                  <div className="mt-2 flex snap-x gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {ownSetupUnits.map((unit) => {
+                      const placement = setupPlacementByUnitId.get(unit.unitId);
+                      const selected = setupSelectedUnitId === unit.unitId;
+                      return (
+                        <button
+                          key={unit.unitId}
+                          type="button"
+                          onClick={() => selectSetupUnit(unit.unitId)}
+                          disabled={setupSubmitted || isPending}
+                          className={`min-h-16 min-w-36 snap-start rounded-2xl border px-3 py-2 text-left text-xs transition disabled:opacity-40 ${
+                            selected
+                              ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/70"
+                              : setupReserveIdSet.has(unit.unitId)
+                                ? "border-emerald-200 bg-emerald-300/15 text-emerald-50"
+                                : placement !== undefined
+                                  ? "border-white/60 bg-white/10 text-white"
+                                  : "border-slate-700 bg-slate-950/80 text-slate-300"
+                          }`}
+                        >
+                          <span className="block font-bold text-white">{unit.revealed ? unit.card.cardName : compactId(unit.unitId)}</span>
+                          <span className="text-slate-400">{placement === undefined ? "未配置" : toCoordinateLabel(placement.position)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="grid gap-3">
+                  <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3">
+                    <h3 className="text-sm font-bold text-white">選択中</h3>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {selectedSetupUnit === null ? "カードを選択してください。" : `${selectedSetupUnit.revealed ? selectedSetupUnit.card.cardName : compactId(selectedSetupUnit.unitId)} を配置またはリザーブ指定できます。`}
+                    </p>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">仮配置済み</h3>
+                    <div className="mt-2 grid gap-2">
+                      {setupPlacements.length === 0 ? <p className="text-xs text-slate-400">なし</p> : setupPlacements.map((placement) => {
+                        const unit = ownSetupUnits.find((candidate) => candidate.unitId === placement.unitId);
+                        return (
+                          <div key={placement.unitId} className="rounded-2xl border border-slate-700 bg-slate-950/80 p-3 text-xs">
+                            <button type="button" onClick={() => selectSetupUnit(placement.unitId)} className="font-bold text-cyan-100">
+                              {unit?.revealed ? unit.card.cardName : compactId(placement.unitId)} / {toCoordinateLabel(placement.position)}
+                            </button>
+                            <div className="mt-2 grid grid-cols-3 gap-2">
+                              {(["attack", "defense"] as const).map((stance) => (
+                                <button key={stance} type="button" onClick={() => updateSetupStance(placement.unitId, stance)} className={`min-h-10 rounded-xl border px-2 py-2 font-bold ${placement.stance === stance ? "border-cyan-200 bg-cyan-300/20 text-cyan-50" : "border-slate-700 text-slate-300"}`}>{stanceLabel(stance)} {stance}</button>
+                              ))}
+                              <button type="button" onClick={() => clearSetupPlacement(placement.unitId)} className="min-h-10 rounded-xl border border-rose-300/50 px-2 py-2 font-bold text-rose-100">解除</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">リザーバー予定</h3>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {ownSetupUnits.map((unit) => (
+                        <button
+                          key={`reserve-${unit.unitId}`}
+                          type="button"
+                          disabled={setupSubmitted || isPending || (!setupReserveIdSet.has(unit.unitId) && setupReserveUnitIds.length >= 2)}
+                          onClick={() => toggleSetupReserve(unit.unitId)}
+                          className={`min-h-11 rounded-2xl border px-3 py-2 text-left text-xs disabled:opacity-40 ${setupReserveIdSet.has(unit.unitId) ? "border-emerald-200 bg-emerald-300/20 text-emerald-50" : "border-slate-700 bg-slate-950/80 text-slate-300"}`}
+                        >
+                          {unit.revealed ? unit.card.cardName : compactId(unit.unitId)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={setupSubmitted || isPending || setupPlacements.length !== 6 || setupReserveUnitIds.length !== 2}
+                    onClick={submitSetupPlacement}
+                    className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    配置を提出
+                  </button>
+                  {!setupSubmitted && (setupPlacements.length !== 6 || setupReserveUnitIds.length !== 2) ? (
+                    <p className="text-xs text-slate-400">6体配置・2体リザーブを満たすと提出できます。</p>
+                  ) : null}
+                  {setupSubmitted && !opponentSetupSubmitted ? (
+                    <p className="text-xs text-slate-300">相手の準備完了を待っています。</p>
+                  ) : null}
                 </div>
               </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">仮配置済みカード</h3>
-                <div className="mt-2 grid gap-2">
-                  {setupPlacements.length === 0 ? <p className="text-xs text-slate-400">なし</p> : setupPlacements.map((placement) => {
-                    const unit = ownSetupUnits.find((candidate) => candidate.unitId === placement.unitId);
+            )}
+          </section>
+        ) : null}
+
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-2 shadow-2xl shadow-black/20 sm:p-3">
+          <div className="mb-2 flex items-center justify-between gap-3 px-1">
+            <div>
+              <h2 className="text-base font-bold text-white">8×8 Board</h2>
+              <p className="text-[0.68rem] text-slate-400">座標は現在の{viewerSide}視点で反転表示</p>
+            </div>
+            <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-1 text-xs text-slate-300">
+              {view.boardSize.width}×{view.boardSize.height}
+            </span>
+          </div>
+          <div className="mb-2 grid grid-cols-4 gap-1 text-center text-[0.58rem] font-bold sm:text-[0.68rem]">
+            <span className="rounded-full border border-cyan-300/50 px-1.5 py-1 text-cyan-100">○ 移動</span>
+            <span className="rounded-full border border-rose-300/50 px-1.5 py-1 text-rose-100">⚔ 戦闘</span>
+            <span className="rounded-full border border-emerald-300/50 px-1.5 py-1 text-emerald-100">配 予備</span>
+            <span className="rounded-full border border-amber-200/60 px-1.5 py-1 text-amber-100">旗 攻撃</span>
+          </div>
+          <div className="grid grid-cols-[1rem_minmax(0,1fr)] gap-1 sm:grid-cols-[1.25rem_minmax(0,1fr)]">
+            <div aria-hidden="true" />
+            <div className="grid grid-cols-8 gap-1 text-center text-[0.55rem] font-bold text-slate-500">
+              {boardColumnLabels.map((column) => (
+                <span key={`col-${column}`}>c{column}</span>
+              ))}
+            </div>
+            {boardRows.map((row) => (
+              <div key={`row-${row.rowIndex}`} className="contents">
+                <div className="flex items-center justify-center text-[0.55rem] font-bold text-slate-500">r{row.rowIndex}</div>
+                <div className="grid w-full grid-cols-8 gap-1" aria-label="8 by 8 local debug board">
+                  {row.cells.map((cell) => {
+                    const setupDraft = setupPlacements.find((placement) => coordinateKey(placement.position) === coordinateKey(cell.coordinate));
+                    const setupDraftUnit = setupDraft === undefined ? null : ownSetupUnits.find((unit) => unit.unitId === setupDraft.unitId) ?? null;
+                    const unit = isSetupPhase ? setupDraftUnit : cell.unit;
+                    const coordinate = coordinateKey(cell.coordinate);
+                    const setupLegal = isSetupPhase && setupSelectedUnitId !== null && !setupReserveIdSet.has(setupSelectedUnitId) && setupLegalCoordinateKeys.has(coordinate) && (!setupOccupiedCoordinateKeys.has(coordinate) || setupDraft?.unitId === setupSelectedUnitId);
+                    const selected = unit?.unitId === selectedUnitId || setupDraft?.unitId === setupSelectedUnitId;
+                    const candidate = candidatesByCoordinate.get(coordinate);
+                    const destinationSelected = selectedDestination !== null && coordinateKey(selectedDestination.destination) === coordinate;
+                    const cellLabel = `${toCoordinateLabel(cell.coordinate)}${candidate === undefined ? "" : ` ${candidateLabel(candidate)}`}${unit === null ? " empty" : ` ${isOwnUnit(view, unit) ? "own" : "enemy"} ${unit.revealed ? "revealed" : "hidden"}`}`;
                     return (
-                      <div key={placement.unitId} className="rounded-2xl border border-slate-700 bg-slate-950/80 p-3 text-xs">
-                        <button type="button" onClick={() => selectSetupUnit(placement.unitId)} className="font-bold text-cyan-100">
-                          {unit?.revealed ? unit.card.cardName : compactId(placement.unitId)} / {toCoordinateLabel(placement.position)}
-                        </button>
-                        <div className="mt-2 grid grid-cols-3 gap-2">
-                          {(["attack", "defense"] as const).map((stance) => (
-                            <button key={stance} type="button" onClick={() => updateSetupStance(placement.unitId, stance)} className={`rounded-xl border px-2 py-2 font-bold ${placement.stance === stance ? "border-cyan-200 bg-cyan-300/20 text-cyan-50" : "border-slate-700 text-slate-300"}`}>{stance}</button>
-                          ))}
-                          <button type="button" onClick={() => clearSetupPlacement(placement.unitId)} className="rounded-xl border border-rose-300/50 px-2 py-2 font-bold text-rose-100">解除</button>
-                        </div>
-                      </div>
+                      <button
+                        key={coordinate}
+                        type="button"
+                        onClick={() => handleCellClick(unit, cell.coordinate)}
+                        disabled={isFinished}
+                        className={`relative aspect-square min-w-0 rounded-lg border p-0.5 text-[0.55rem] shadow-lg transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-70 sm:rounded-xl ${
+                          destinationSelected
+                            ? "border-white bg-white/20 ring-2 ring-white"
+                            : selected
+                              ? "border-white bg-white/10 ring-2 ring-white/80"
+                              : setupLegal
+                                ? "border-cyan-200 bg-cyan-400/15 ring-1 ring-cyan-200/60"
+                                : candidateClasses(candidate)
+                        }`}
+                        aria-label={cellLabel}
+                      >
+                        <span className="absolute left-1 top-0.5 z-10 rounded bg-slate-950/70 px-0.5 text-[0.48rem] font-bold text-slate-400">
+                          {cell.coordinate.row},{cell.coordinate.col}
+                        </span>
+                        {candidate !== undefined ? (
+                          <span className={`absolute right-0.5 top-0.5 z-20 rounded-full border px-1 text-[0.55rem] font-black ${candidateToneClasses[candidate.kind]}`}>
+                            {candidateMarker(candidate)}
+                          </span>
+                        ) : null}
+                        {setupLegal ? (
+                          <span className="absolute right-0.5 top-0.5 z-20 rounded-full border border-cyan-200 bg-cyan-400/25 px-1 text-[0.55rem] font-black text-cyan-50">初</span>
+                        ) : null}
+                        {unit === null ? (
+                          <span className="flex h-full items-center justify-center text-[0.6rem] text-slate-700">·</span>
+                        ) : (
+                          <UnitPill view={view} unit={unit} selected={selected} />
+                        )}
+                      </button>
                     );
                   })}
                 </div>
               </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">リザーバー予定カード</h3>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {ownSetupUnits.map((unit) => (
-                    <button
-                      key={`reserve-${unit.unitId}`}
-                      type="button"
-                      disabled={setupSubmitted || isPending || (!setupReserveIdSet.has(unit.unitId) && setupReserveUnitIds.length >= 2)}
-                      onClick={() => toggleSetupReserve(unit.unitId)}
-                      className={`rounded-2xl border px-3 py-2 text-left text-xs disabled:opacity-40 ${setupReserveIdSet.has(unit.unitId) ? "border-emerald-200 bg-emerald-300/20 text-emerald-50" : "border-slate-700 bg-slate-950/80 text-slate-300"}`}
-                    >
-                      {unit.revealed ? unit.card.cardName : compactId(unit.unitId)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <button
-                type="button"
-                disabled={setupSubmitted || isPending || setupPlacements.length !== 6 || setupReserveUnitIds.length !== 2}
-                onClick={submitSetupPlacement}
-                className="rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                SUBMIT_INITIAL_PLACEMENTを提出
-              </button>
-              {!setupSubmitted && (setupPlacements.length !== 6 || setupReserveUnitIds.length !== 2) ? (
-                <p className="text-xs text-slate-400">6体配置・2体リザーブを満たすと提出できます。</p>
-              ) : null}
-              {setupSubmitted && !opponentSetupSubmitted ? (
-                <p className="text-xs text-slate-300">相手の準備完了を待っています。</p>
-              ) : null}
-            </div>
-          </section>
-        ) : null}
-
-        <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-3">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-base font-bold text-white">Board</h2>
-            <span className="text-xs text-slate-400">
-              {view.boardSize.width}×{view.boardSize.height}
-            </span>
-          </div>
-          <div className="mb-3 flex flex-wrap gap-2 text-[0.68rem] text-slate-300">
-            <span className="rounded-full border border-cyan-300/50 px-2 py-1">○ 通常移動</span>
-            <span className="rounded-full border border-rose-300/50 px-2 py-1">⚔ 戦闘候補</span>
-            <span className="rounded-full border border-emerald-300/50 px-2 py-1">配 リザーバー配置</span>
-            <span className="rounded-full border border-amber-200/60 px-2 py-1">旗 旗攻撃</span>
-          </div>
-          <div
-            className="grid w-full grid-cols-8 gap-1"
-            aria-label="8 by 8 local debug board"
-          >
-            {boardRows.flatMap((row) =>
-              row.cells.map((cell) => {
-                const setupDraft = setupPlacements.find((placement) => coordinateKey(placement.position) === coordinateKey(cell.coordinate));
-                const setupDraftUnit = setupDraft === undefined ? null : ownSetupUnits.find((unit) => unit.unitId === setupDraft.unitId) ?? null;
-                const unit = isSetupPhase ? setupDraftUnit : cell.unit;
-                const setupLegal = isSetupPhase && setupSelectedUnitId !== null && !setupReserveIdSet.has(setupSelectedUnitId) && setupLegalCoordinateKeys.has(coordinateKey(cell.coordinate)) && (!setupOccupiedCoordinateKeys.has(coordinateKey(cell.coordinate)) || setupDraft?.unitId === setupSelectedUnitId);
-                const selected = unit?.unitId === selectedUnitId || setupDraft?.unitId === setupSelectedUnitId;
-                const candidate = candidatesByCoordinate.get(coordinateKey(cell.coordinate));
-                const destinationSelected =
-                  selectedDestination !== null &&
-                  coordinateKey(selectedDestination.destination) === coordinateKey(cell.coordinate);
-                return (
-                  <button
-                    key={`${cell.coordinate.row}:${cell.coordinate.col}`}
-                    type="button"
-                    onClick={() => handleCellClick(unit, cell.coordinate)}
-                    disabled={isFinished}
-                    className={`relative aspect-square min-w-0 rounded-xl border p-1 text-[0.55rem] transition focus:outline-none focus:ring-2 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-70 ${
-                      destinationSelected
-                        ? "border-white bg-white/15"
-                        : selected
-                          ? "border-white bg-white/10"
-                          : setupLegal
-                            ? "border-cyan-300 bg-cyan-400/15"
-                            : candidateClasses(candidate)
-                    }`}
-                    aria-label={`cell ${toCoordinateLabel(cell.coordinate)}${
-                      candidate === undefined ? "" : ` ${candidateLabel(candidate)}`
-                    }`}
-                  >
-                    {candidate !== undefined ? (
-                      <span className="absolute right-1 top-0.5 z-10 rounded-full bg-slate-950/80 px-1 text-[0.55rem] font-black text-white">
-                        {candidateMarker(candidate)}
-                      </span>
-                    ) : null}
-                    {setupLegal ? (
-                      <span className="absolute right-1 top-1 text-[0.6rem] font-bold text-cyan-100">初</span>
-                    ) : null}
-                    {unit === null ? (
-                      <span className="flex h-full items-start justify-start text-slate-600">
-                        {cell.coordinate.row},{cell.coordinate.col}
-                      </span>
-                    ) : (
-                      <UnitPill view={view} unit={unit} selected={selected} />
-                    )}
-                  </button>
-                );
-              }),
-            )}
+            ))}
           </div>
         </section>
 
-        <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
-          <h2 className="text-lg font-bold text-white">操作確認</h2>
-          <div className="mt-3 grid gap-2 text-sm text-slate-300">
-            <p>操作: {actionMode === "none" ? "—" : actionMode}</p>
-            <p>選択中: {selectedUnitId === null ? "—" : compactId(selectedUnitId)}</p>
-            <p>
-              候補数: 通常 {candidates.filter((candidate) => candidate.kind === "move").length} / 戦闘 {candidates.filter((candidate) => candidate.kind === "engage").length} / 配置 {candidates.filter((candidate) => candidate.kind === "deploy").length} / 旗攻撃 {candidates.filter((candidate) => candidate.kind === "flag_attack").length}
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/95 p-3 shadow-2xl shadow-black/30 sm:p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold text-white">主要操作</h2>
+            <span className={`rounded-full border px-3 py-1 text-xs font-bold ${isViewerTurn ? "border-emerald-300/60 bg-emerald-400/15 text-emerald-50" : "border-slate-700 bg-slate-950 text-slate-400"}`}>
+              {isViewerTurn ? "自分の手番" : "操作制限中"}
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-300">
+            <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">操作: <span className="font-bold text-white">{selectedActionLabel(actionMode)}</span></p>
+            <p className="rounded-2xl border border-slate-700 bg-slate-950/70 p-2">選択: <span className="font-bold text-white">{selectedUnitId === null ? "—" : compactId(selectedUnitId)}</span></p>
+            <p className="col-span-2 rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
+              候補: ○{countCandidates(candidates, "move")} / ⚔{countCandidates(candidates, "engage")} / 配{countCandidates(candidates, "deploy")} / 旗{countCandidates(candidates, "flag_attack")}
             </p>
-            <p>
+            <p className="col-span-2 rounded-2xl border border-slate-700 bg-slate-950/70 p-2">
               対象: {selectedDestination === null ? "—" : `${toCoordinateLabel(selectedDestination.destination)} (${candidateLabel(selectedDestination)})`}
             </p>
           </div>
 
           {actionStep === "stance" || actionStep === "confirm" ? (
-            <div className="mt-4 grid gap-3">
+            <div className="mt-4 grid gap-2">
+              <p className="text-xs font-bold text-slate-300">実行後の表示形式</p>
               <div className="grid grid-cols-2 gap-2">
                 {(["attack", "defense"] as const).map((stance) => (
                   <button
@@ -930,13 +1068,15 @@ export default function LocalMatchDebugClient({
                       setNextStance(stance);
                       setActionStep("confirm");
                     }}
-                    className={`rounded-2xl border px-3 py-3 text-sm font-bold ${
+                    className={`min-h-14 rounded-2xl border px-3 py-3 text-sm font-black ${
                       nextStance === stance
-                        ? "border-cyan-300 bg-cyan-300/15 text-cyan-50"
+                        ? "border-cyan-200 bg-cyan-300/20 text-cyan-50 ring-2 ring-cyan-200/70"
                         : "border-slate-700 bg-slate-950 text-slate-300"
                     }`}
+                    aria-label={`choose ${stance} stance`}
                   >
-                    {stance}
+                    <span className="block text-lg">{stanceLabel(stance)}</span>
+                    {stanceFullLabel(stance)}
                   </button>
                 ))}
               </div>
@@ -951,7 +1091,7 @@ export default function LocalMatchDebugClient({
             <button
               type="button"
               onClick={resetSelection}
-              className="rounded-2xl border border-slate-600 bg-slate-950 px-3 py-3 text-sm font-bold text-slate-200"
+              className="min-h-12 rounded-2xl border border-slate-600 bg-slate-950 px-3 py-3 text-sm font-bold text-slate-200"
             >
               キャンセル
             </button>
@@ -963,35 +1103,36 @@ export default function LocalMatchDebugClient({
                 (actionMode !== "concede" &&
                   (selectedUnitId === null || selectedDestination === null || actionStep !== "confirm"))
               }
-              className="rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-12 rounded-2xl border border-emerald-300 bg-emerald-400/20 px-3 py-3 text-sm font-bold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
               確認して実行
             </button>
           </div>
         </section>
 
-        <section className="grid gap-3">
-          {view.players.map((player) => (
-            <div key={player.id} className="grid gap-3">
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
-                {formatPlayerLabel(player)} / viewer side: {getPlayerSide(view, player.id)}
+        {!isSetupPhase ? (
+          <section className="grid gap-3 lg:grid-cols-2">
+            {view.players.map((player) => (
+              <div key={player.id} className="grid gap-3">
+                <FlagPanel view={view} player={player} />
+                <ReservePanel
+                  view={view}
+                  player={player}
+                  selectedUnitId={selectedUnitId}
+                  disabled={!canStartTurnAction}
+                  onSelect={fetchReserveCandidates}
+                />
               </div>
-              <FlagPanel player={player} />
-              <ReservePanel
-                view={view}
-                player={player}
-                selectedUnitId={selectedUnitId}
-                disabled={!canStartTurnAction}
-                onSelect={fetchReserveCandidates}
-              />
-            </div>
-          ))}
-        </section>
+            ))}
+          </section>
+        ) : null}
+
+        <DetailPanel unit={selectedUnit} />
 
         <section className="rounded-3xl border border-rose-300/30 bg-rose-500/10 p-4">
-          <h2 className="text-lg font-bold text-rose-50">投了</h2>
+          <h2 className="text-base font-bold text-rose-50">危険操作</h2>
           <p className="mt-2 text-xs leading-5 text-rose-100/80">
-            activeフェーズなら自分の手番以外でもCONCEDE_MATCHを送信できます。確認後、相手が勝者になります。
+            投了・リセットは確認用ボタンを分けています。activeフェーズなら自分の手番以外でもCONCEDE_MATCHを送信できます。
           </p>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
@@ -1002,40 +1143,45 @@ export default function LocalMatchDebugClient({
                 setActionMode("concede");
                 setActionStep("confirm");
               }}
-              className="rounded-2xl border border-rose-300/60 bg-rose-400/15 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-12 rounded-2xl border border-rose-300/60 bg-rose-400/15 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              投了確認を開く
+              投了確認
             </button>
             <button
               type="button"
               disabled={actionMode !== "concede" || isPending}
               onClick={submitSelectedAction}
-              className="rounded-2xl border border-rose-200 bg-rose-500/25 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-12 rounded-2xl border border-rose-200 bg-rose-500/25 px-3 py-3 text-sm font-bold text-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              CONCEDE_MATCH実行
+              投了実行
             </button>
           </div>
         </section>
 
-        <DetailPanel unit={selectedUnit} />
         <EventLog events={data.events} />
 
-        <section className="mb-4 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => resetMatch("setup")}
-            className="rounded-3xl border border-cyan-300/50 bg-cyan-500/10 px-4 py-3 text-sm font-bold text-cyan-100"
-          >
-            setup開始へリセット
-          </button>
-          <button
-            type="button"
-            onClick={() => resetMatch("active")}
-            className="rounded-3xl border border-rose-300/50 bg-rose-500/10 px-4 py-3 text-sm font-bold text-rose-100"
-          >
-            activeデバッグへリセット
-          </button>
-        </section>
+        <details className="mb-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-4">
+          <summary className="cursor-pointer list-none text-base font-bold text-white focus:outline-none focus:ring-2 focus:ring-cyan-300">
+            リセット / 詳細
+          </summary>
+          <p className="mt-3 text-xs leading-5 text-slate-400">{data.stateStorageNote}</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => resetMatch("setup")}
+              className="min-h-12 rounded-3xl border border-cyan-300/50 bg-cyan-500/10 px-4 py-3 text-sm font-bold text-cyan-100"
+            >
+              setupへリセット
+            </button>
+            <button
+              type="button"
+              onClick={() => resetMatch("active")}
+              className="min-h-12 rounded-3xl border border-rose-300/50 bg-rose-500/10 px-4 py-3 text-sm font-bold text-rose-100"
+            >
+              activeへリセット
+            </button>
+          </div>
+        </details>
       </div>
     </main>
   );
