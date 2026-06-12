@@ -4,6 +4,7 @@ import {
   TACTICAL_DUEL_RULE_CONFIG,
   TACTICAL_DUEL_RULES_VERSION,
   applyTacticalDuelAction,
+  calculateLegalMoves,
   toActionId,
   toUnitId,
 } from "../../../src/game";
@@ -14,6 +15,7 @@ import {
 import {
   LOCAL_DEBUG_MATCH_PLAYER_IDS,
   localDebugMatchState,
+  localDebugSetupMatchState,
 } from "../../../src/app/debug/local-match/fixture";
 import type {
   GameEventPayload,
@@ -385,6 +387,72 @@ describe("local debug browser state harness", () => {
     expect(activeRestored.view.stateVersion).toBe(started.view.stateVersion);
   });
 
+  it("uses fixture MovementRule values so orthogonal and diagonal units can reach the board edge", () => {
+    const orthogonalUnit = localDebugMatchState.units.find(
+      (unit) => unit.id === unitId("local-debug-south-aegis"),
+    );
+    const diagonalUnit = localDebugSetupMatchState.units.find(
+      (unit) => unit.id === setupUnitId("south", 2),
+    );
+    if (orthogonalUnit === undefined || diagonalUnit === undefined) {
+      throw new Error("missing movement fixture unit");
+    }
+
+    expect(orthogonalUnit.card.movementRule).toMatchObject({
+      kind: "line",
+      maxDistance: null,
+    });
+    expect(diagonalUnit.card.movementRule).toMatchObject({
+      kind: "line",
+      maxDistance: null,
+    });
+
+    const orthogonalMoves = unwrap(
+      calculateLegalMoves({
+        unit: orthogonalUnit,
+        units: localDebugMatchState.units,
+        boardSize: localDebugMatchState.boardSize,
+        movementRule: orthogonalUnit.card.movementRule,
+        config: TACTICAL_DUEL_RULE_CONFIG,
+      }),
+    );
+    expect(orthogonalMoves).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          destination: { row: 1, col: 3 },
+          kind: "move",
+        }),
+      ]),
+    );
+
+    const diagonalBoardUnit = {
+      ...diagonalUnit,
+      status: "board" as const,
+      position: { row: 4, col: 4 },
+    };
+    const diagonalMoves = unwrap(
+      calculateLegalMoves({
+        unit: diagonalBoardUnit,
+        units: [diagonalBoardUnit],
+        boardSize: localDebugSetupMatchState.boardSize,
+        movementRule: diagonalBoardUnit.card.movementRule,
+        config: TACTICAL_DUEL_RULE_CONFIG,
+      }),
+    );
+    expect(diagonalMoves).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          destination: { row: 0, col: 0 },
+          kind: "move",
+        }),
+        expect.objectContaining({
+          destination: { row: 7, col: 7 },
+          kind: "move",
+        }),
+      ]),
+    );
+  });
+
   it("restores active move, combat defense changes, reserve deployment, flag damage, and concession", () => {
     const storage = new MemoryStorage();
     const harness = createLocalDebugBrowserHarness(storage, "south");
@@ -483,6 +551,24 @@ describe("local debug browser state harness", () => {
     expect(restored.view.phase).toBe("finished");
     expect(restored.view.winReason).toBe("concession");
     expect(restored.view.stateVersion).toBe(response.view.stateVersion);
+  });
+
+  it("rejects DEPLOY_RESERVE when a board unit id is submitted, preventing actionType mix-ups", () => {
+    const storage = new MemoryStorage();
+    const harness = createLocalDebugBrowserHarness(storage, "south");
+    const active = unwrap(harness.reset("south", "active"));
+
+    expectErrorCode(
+      harness.submitDeployReserve({
+        viewerSide: "south",
+        unitId: unitId("local-debug-south-aegis"),
+        destination: { row: 6, col: 0 },
+        stance: "attack",
+        expectedStateVersion: active.view.stateVersion,
+        actionId: actionId("deploy-board-unit"),
+      }),
+      "UNIT_NOT_IN_RESERVE",
+    );
   });
 
   it("rejects stale actions and reducer failures without overwriting persisted state", () => {

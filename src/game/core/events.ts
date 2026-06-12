@@ -44,6 +44,18 @@ export type CombatResolvedEvent = BaseGameEvent & {
   type: "COMBAT_RESOLVED";
   attackerUnitId: UnitId;
   defenderUnitId: UnitId;
+  attackerStance: Stance;
+  defenderStance: Stance;
+  attackerAttack: number;
+  defenderAttack: number;
+  attackerDefenseBefore: number;
+  attackerDefenseAfter: number;
+  defenderDefenseBefore: number;
+  defenderDefenseAfter: number;
+  attackerStatusAfter: "reserve" | "board" | "defeated";
+  defenderStatusAfter: "reserve" | "board" | "defeated";
+  attackerMovedToDestination: boolean;
+  outcome: string;
 };
 
 export type UnitDefeatedEvent = BaseGameEvent & {

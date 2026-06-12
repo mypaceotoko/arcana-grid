@@ -25,7 +25,7 @@ const orthogonalLineRule: MovementRule = {
     { row: 0, col: -1 },
     { row: 0, col: 1 },
   ],
-  maxDistance: 2,
+  maxDistance: null,
 };
 
 const diagonalLineRule: MovementRule = {
@@ -36,7 +36,7 @@ const diagonalLineRule: MovementRule = {
     { row: 1, col: -1 },
     { row: 1, col: 1 },
   ],
-  maxDistance: 2,
+  maxDistance: null,
 };
 
 const adjacentRule: MovementRule = {
