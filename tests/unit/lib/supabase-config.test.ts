@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  getSupabaseConfigStatus,
   getSupabasePublicConfig,
   getSupabaseServiceRoleKey,
+  isSupabaseAnonKeyConfigured,
   isSupabaseConfigured,
   isSupabaseServerConfigured,
+  isSupabaseServiceRoleKeyConfigured,
+  isSupabaseUrlConfigured,
 } from "../../../src/lib/supabase/config";
 
 const ENV_KEYS = [
@@ -61,5 +65,47 @@ describe("supabase config helpers", () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
     expect(getSupabaseServiceRoleKey()).toBe("service-role");
     expect(isSupabaseServerConfigured()).toBe(true);
+  });
+
+  it("exposes per-variable booleans without throwing when unset", () => {
+    expect(isSupabaseUrlConfigured()).toBe(false);
+    expect(isSupabaseAnonKeyConfigured()).toBe(false);
+    expect(isSupabaseServiceRoleKeyConfigured()).toBe(false);
+  });
+
+  it("reports the full config status when fully unset", () => {
+    expect(getSupabaseConfigStatus()).toEqual({
+      urlConfigured: false,
+      anonKeyConfigured: false,
+      serviceRoleKeyConfigured: false,
+      publicConfigured: false,
+      serverConfigured: false,
+    });
+  });
+
+  it("reports the full config status when fully configured", () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
+
+    expect(isSupabaseUrlConfigured()).toBe(true);
+    expect(isSupabaseAnonKeyConfigured()).toBe(true);
+    expect(isSupabaseServiceRoleKeyConfigured()).toBe(true);
+    expect(getSupabaseConfigStatus()).toEqual({
+      urlConfigured: true,
+      anonKeyConfigured: true,
+      serviceRoleKeyConfigured: true,
+      publicConfigured: true,
+      serverConfigured: true,
+    });
+  });
+
+  it("never exposes the service role key value through the status summary", () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "super-secret-service-role-key";
+
+    const status = getSupabaseConfigStatus();
+    expect(JSON.stringify(status)).not.toContain("super-secret-service-role-key");
   });
 });

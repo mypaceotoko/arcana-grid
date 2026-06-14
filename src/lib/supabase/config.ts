@@ -50,6 +50,49 @@ export const getSupabaseServiceRoleKey = (): string | null => {
 export const isSupabaseServerConfigured = (): boolean =>
   getSupabasePublicConfig() !== null && getSupabaseServiceRoleKey() !== null;
 
+/** True when `NEXT_PUBLIC_SUPABASE_URL` is set to a non-empty string. */
+export const isSupabaseUrlConfigured = (): boolean => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  return typeof url === "string" && url.length > 0;
+};
+
+/** True when `NEXT_PUBLIC_SUPABASE_ANON_KEY` is set to a non-empty string. */
+export const isSupabaseAnonKeyConfigured = (): boolean => {
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  return typeof anonKey === "string" && anonKey.length > 0;
+};
+
+/**
+ * True when `SUPABASE_SERVICE_ROLE_KEY` is set to a non-empty string.
+ * SERVER-ONLY check (the key itself is never returned).
+ */
+export const isSupabaseServiceRoleKeyConfigured = (): boolean =>
+  getSupabaseServiceRoleKey() !== null;
+
+/**
+ * Boolean-only summary of the Supabase env configuration, safe to surface on
+ * debug pages/APIs: it never returns the actual URL or key values, only
+ * whether each variable is present.
+ */
+export type SupabaseConfigStatus = {
+  urlConfigured: boolean;
+  anonKeyConfigured: boolean;
+  serviceRoleKeyConfigured: boolean;
+  /** Both browser-safe public vars are set (matches `isSupabaseConfigured()`). */
+  publicConfigured: boolean;
+  /** Public vars and the service role key are all set (matches `isSupabaseServerConfigured()`). */
+  serverConfigured: boolean;
+};
+
+/** Returns the boolean-only Supabase configuration summary. */
+export const getSupabaseConfigStatus = (): SupabaseConfigStatus => ({
+  urlConfigured: isSupabaseUrlConfigured(),
+  anonKeyConfigured: isSupabaseAnonKeyConfigured(),
+  serviceRoleKeyConfigured: isSupabaseServiceRoleKeyConfigured(),
+  publicConfigured: isSupabaseConfigured(),
+  serverConfigured: isSupabaseServerConfigured(),
+});
+
 /**
  * Module specifier for the Supabase JS SDK. Typed as `string` (not a string
  * literal) on purpose: the SDK is not a dependency yet, so a literal dynamic
