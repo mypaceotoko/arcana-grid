@@ -221,3 +221,38 @@
 - `SUPABASE_SERVICE_ROLE_KEY` は **サーバー専用**。`NEXT_PUBLIC_` を付けない。クライアントコード（Client Component）へ import しない。`src/lib/supabase/server.ts` からのみ使う。
 - 実キーは絶対にコミットしない（`.env*` は `.env.example` を除き gitignore 済み）。
 - スキーマ変更は migration で行い、RLS を有効化してからクライアント可読列を最小化する。
+
+---
+
+## 13. Task S1: 本番 Supabase プロジェクトのセットアップ手順（手動）
+
+Task S1 では、コード側に「環境変数が設定されている場合だけ安全に接続確認できる」土台を追加した。
+**実際の Supabase プロジェクト作成・キーの設定はユーザーが手動で行う。** 手順は以下のとおり。
+
+1. [Supabase](https://supabase.com/) で新規プロジェクトを作成する。
+2. プロジェクトの SQL Editor で `supabase/migrations/0001_initial_schema.sql` の内容を実行する（テーブル・enum・RLS 設計のコメントを含む DDL）。
+3. Project Settings > API から **Project URL** と **anon public key** を取得する。
+4. Project Settings > API から **service_role key** を取得する。この値はサーバー専用であり、ブラウザに渡してはいけない。
+5. ローカル開発用に、リポジトリルートの `.env.local`（gitignore 済み・コミット禁止）に以下を設定する。
+
+   ```bash
+   # .env.local （本物の値はコミットしないこと）
+   NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=ey... (anon public key)
+   SUPABASE_SERVICE_ROLE_KEY=ey... (service_role key, サーバー専用)
+   ```
+
+6. Vercel の Project Settings > Environment Variables に同じ3つの変数を設定する。
+   - `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Production / Preview / Development すべてに設定して良い（ブラウザに公開される値）。
+   - `SUPABASE_SERVICE_ROLE_KEY`: サーバー専用。`NEXT_PUBLIC_` を付けず、クライアントから読まれないことを確認する。
+7. `/debug/supabase` を開き、以下が `yes` になっていることを確認する。
+   - Supabase public URL configured
+   - Supabase anon key configured
+   - Supabase server/service role configured
+   - client config ready
+   - server config ready
+
+   環境変数が未設定の場合は、エラーにならず「Supabase環境変数が未設定です。Vercelまたは.env.localに設定してください。」と表示される。
+8. `/api/debug/supabase/health` を開き、サーバー側から見た接続状態（`configured` / `serverConfigured` / `canCreateClient` / `canReachSupabase` / `errorCode` / `safeMessage`）を確認する。anon key・service role key の値そのものはレスポンスに含まれない。
+
+この手順を実施しても、オンライン対戦・ルーム作成・Realtime・Auth・カード所持・DB 書き込みはまだ動かない（Task S2 以降）。
