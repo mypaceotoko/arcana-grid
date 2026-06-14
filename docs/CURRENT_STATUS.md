@@ -49,8 +49,9 @@
 
 ## 現在の次タスク
 
-- 次タスク: Task 7Fの公開URL用ブラウザ内デバッグ対戦状態の追加後確認、またはオンライン対戦基盤。
-- 今回未実装: 戦闘アニメーション、カード画像の本格導入、Supabase/Auth/Database/Realtime/オンライン対戦。
+- Supabase導入の設計・準備を完了（`docs/SUPABASE_PLAN.md`、`supabase/migrations/0001_initial_schema.sql`(未適用)、`.env.example`、`src/lib/supabase/`雛形）。ルール・reducer・/debug/local-matchは未変更。
+- 次タスク: Task S1（Supabase project setup & env check）。`docs/SUPABASE_PLAN.md`のTask一覧を正とする。
+- 今回未実装: Supabase本番接続、Auth、Realtime、オンライン対戦画面、`@supabase/supabase-js`導入。
 
 ## 未実装項目
 
