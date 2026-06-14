@@ -34,6 +34,7 @@
 - 現在viewerの自分の盤面ユニット選択、サーバー側合法移動候補取得、通常移動/戦闘候補の区別表示、attack/defense選択、MOVE_UNIT実行、DEPLOY_RESERVE、ATTACK_FLAG、CONCEDE_MATCH、イベントログ、setup/active fixtureリセット。
 - Task 7E: iPhone縦画面を優先した `/debug/local-match` のモバイルUI・UX改善。上部のコンパクトな対戦ステータス、横スクロールしない8×8盤面、座標表示、候補種別バッジ、旗ダメージメーター、押しやすいattack/defense選択、折りたたみイベントログ/リセット詳細、finished結果パネルを追加。active中の相手伏せカードは位置・裏面だけを安全に表示し、カード名や数値は渡さない。
 - Task 7F: 公開URL用ブラウザ内デバッグ対戦状態を追加。`/debug/local-match` は `localStorage` キー `arcana-grid.local-match.v1` に正規デバッグ用MatchState、イベント履歴、viewer/handoffフローを保存し、ブラウザ内ハーネスで既存reducer・開始処理・PlayerMatchView生成を呼ぶ。公開URLではページ表示と操作をサーバーインメモリに依存させず、壊れた保存データやrulesVersion不一致はsetup fixtureへ安全に戻す。
+- Task 7G: ローカル対戦UIにアクション再生とviewer/turn分離を追加。`applyAction` はアクション後にviewerを相手手番へ自動切替せず、行動したviewerのまま結果イベント(`lastActionEvents`)を返す。UIは行動前PlayerMatchViewを保持し、`playback.ts`/`playback-view.ts`でGameEventからplayback step・frameを生成して、通常移動の1マスずつ進行、戦闘(公開→戦闘→防御値変化→消滅→前進/帰還→ターン交代/勝敗)、リザーバー投入(選択→出現→stance)、旗攻撃(攻撃強調→中央2マス点滅→damage→勝敗)を順番に再生する。再生中は盤面操作を停止し、スキップボタンを用意。再生完了後にhandoff画面(「Xの行動が終了しました／次はYの手番／端末をYへ」)を表示し、「Yの手番を始める」ボタンでのみviewerを切替えて盤面を反転する。未公開カードの数値・名前はplayback/result/handoffへ出さない。ダークファンタジー/ネオン発光基調へUIをブラッシュアップ(背景の魔法陣グラデーション・グリッド、盤面・再生ステージ・handoffのglow)。
 
 ## テスト状況
 

@@ -64,6 +64,13 @@ export type LocalDebugViewResponse = {
   events: readonly LocalDebugEventLogEntry[];
   stateStorageNote: string;
   setup: LocalDebugSetupInfo;
+  /**
+   * Raw reducer events produced by the most recent action, used by the UI to
+   * build a step-by-step playback. Empty for plain view reads and resets.
+   * These only ever carry the acting viewer's own action events, so no
+   * unrevealed opponent card detail can leak through them.
+   */
+  lastActionEvents: readonly GameEventPayload[];
 };
 
 export type LocalDebugMoveCandidatesResponse = {
@@ -437,6 +444,7 @@ export const getLocalDebugMatchView = (
       events: buildEventLog(store.events),
       stateStorageNote: LOCAL_DEBUG_STATE_STORAGE_NOTE,
       setup: buildSetupInfo(store.state, viewerSide),
+      lastActionEvents: [],
     },
   };
 };

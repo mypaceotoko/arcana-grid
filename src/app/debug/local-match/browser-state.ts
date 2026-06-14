@@ -104,10 +104,6 @@ const getPlayerBySide = (state: MatchState, side: PlayerSide) =>
 const isPlayerSetupSubmitted = (state: MatchState, side: PlayerSide): boolean =>
   getPlayerBySide(state, side)?.setupSubmitted === true;
 
-const getCurrentTurnSide = (state: MatchState): PlayerSide | null =>
-  state.players.find((player) => player.id === state.currentTurnPlayerId)
-    ?.side ?? null;
-
 const repairFlowForState = (
   state: MatchState,
   flow: LocalDebugBrowserFlowState,
@@ -955,12 +951,16 @@ export class LocalDebugBrowserHarness {
     });
     if (!result.ok) return result;
     this.commitResult(result.value.state, result.value.events);
+    // The viewer stays on the acting player even after the turn advances to the
+    // opponent. Auto-switching the viewer here is what made the board flip
+    // instantly; instead the UI plays back the action for the current viewer and
+    // only switches sides through the explicit handoff button.
     this.store.flow = repairFlowForState(this.store.state, {
-      viewerSide: getCurrentTurnSide(this.store.state) ?? viewerSide,
+      viewerSide,
       handoffAcknowledged: this.store.flow.handoffAcknowledged,
     });
     this.persist();
-    return this.buildView(this.store.flow.viewerSide);
+    return this.buildView(this.store.flow.viewerSide, result.value.events);
   }
 
   private commitResult(
@@ -996,6 +996,7 @@ export class LocalDebugBrowserHarness {
 
   private buildView(
     viewerSide: PlayerSide,
+    lastActionEvents: readonly GameEventPayload[] = [],
   ): Result<LocalDebugViewResponse, RuleError> {
     const view = buildSafeView(this.store.state, viewerSide);
     if (!view.ok) return view;
@@ -1006,6 +1007,7 @@ export class LocalDebugBrowserHarness {
         events: buildEventLog(this.store.events),
         stateStorageNote: LOCAL_DEBUG_BROWSER_STORAGE_NOTE,
         setup: buildSetupInfo(this.store.state, viewerSide),
+        lastActionEvents: [...lastActionEvents],
       },
     };
   }
