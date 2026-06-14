@@ -643,6 +643,74 @@ describe("local debug browser state harness", () => {
     });
   });
 
+  it("keeps the viewer on the acting player after a move and only switches on explicit handoff", () => {
+    const storage = new MemoryStorage();
+    // Place south-setup-4 (orthogonal) on the board at r6/c5 in an active match.
+    const base = JSON.parse(JSON.stringify(localDebugMatchState)) as MatchState;
+    const setup4State: MatchState = {
+      ...base,
+      units: base.units.map((unit) =>
+        unit.id === unitId("local-debug-south-aegis")
+          ? {
+              ...unit,
+              id: unitId("local-debug-south-setup-4"),
+              position: { row: 6, col: 5 },
+            }
+          : unit,
+      ),
+    };
+    storage.setItem(
+      LOCAL_DEBUG_BROWSER_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: setup4State,
+        events: [],
+        flow: { viewerSide: "south", handoffAcknowledged: true },
+      }),
+    );
+
+    const harness = createLocalDebugBrowserHarness(storage, "south");
+    const moved = unwrap(
+      harness.submitMoveUnit({
+        viewerSide: "south",
+        unitId: unitId("local-debug-south-setup-4"),
+        destination: { row: 4, col: 5 },
+        nextStance: "attack",
+        expectedStateVersion: setup4State.stateVersion,
+        actionId: actionId("setup4-move"),
+      }),
+    );
+
+    // Reducer result is reflected: position and stance updated.
+    const movedUnit = moved.view.units.find(
+      (unit) => unit.unitId === unitId("local-debug-south-setup-4"),
+    );
+    expect(movedUnit?.position).toEqual({ row: 4, col: 5 });
+    if (movedUnit?.revealed) expect(movedUnit.stance).toBe("attack");
+
+    // Only the turn advances to the opponent; the viewer stays on south.
+    expect(moved.view.currentTurnPlayerId).toBe(LOCAL_DEBUG_MATCH_PLAYER_IDS.north);
+    expect(moved.view.viewerId).toBe(LOCAL_DEBUG_MATCH_PLAYER_IDS.south);
+    expect(harness.flow.viewerSide).toBe("south");
+
+    // The action events are returned for playback and describe the r6→r4 move.
+    const movedEvent = moved.lastActionEvents.find(
+      (event) => event.type === "UNIT_MOVED",
+    );
+    expect(movedEvent).toMatchObject({
+      type: "UNIT_MOVED",
+      from: { row: 6, col: 5 },
+      to: { row: 4, col: 5 },
+      stance: "attack",
+    });
+
+    // The explicit handoff button switches the viewer to north and flips sides.
+    const handed = unwrap(harness.getView("north"));
+    expect(handed.view.viewerId).toBe(LOCAL_DEBUG_MATCH_PLAYER_IDS.north);
+    expect(harness.flow.viewerSide).toBe("north");
+    expect(handed.lastActionEvents).toEqual([]);
+  });
+
   it("builds every viewer view from saved MatchState without leaking hidden opponent details", () => {
     const storage = new MemoryStorage();
     const harness = createLocalDebugBrowserHarness(storage, "south");

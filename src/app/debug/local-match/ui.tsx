@@ -31,6 +31,13 @@ import type {
   LocalDebugReserveCandidate,
   LocalDebugViewResponse,
 } from "./harness";
+import { buildPlaybackSteps } from "./playback";
+import {
+  buildPlaybackFrames,
+  computePlaybackBoard,
+  type PlaybackFrame,
+  type PlaybackTone,
+} from "./playback-view";
 
 type ViewerOption = {
   side: "north" | "south";
@@ -225,6 +232,40 @@ const formatPlayerLabel = (
   player: MatchPlayerState,
 ): string =>
   `${playerDisplayName(player.side)}${player.id === view.viewerId ? " / 自分" : " / 相手"}`;
+
+const PLAYBACK_TONE_CELL: Record<PlaybackTone, string> = {
+  reveal: "ring-2 ring-cyan-200 shadow-[0_0_18px_rgba(103,232,249,0.55)]",
+  move: "ring-2 ring-sky-300 shadow-[0_0_18px_rgba(125,211,252,0.55)]",
+  combat: "ring-2 ring-rose-400 shadow-[0_0_22px_rgba(251,113,133,0.65)]",
+  defense: "ring-2 ring-amber-300 shadow-[0_0_18px_rgba(252,211,77,0.55)]",
+  defeat: "ring-2 ring-rose-500 shadow-[0_0_26px_rgba(244,63,94,0.7)]",
+  advance: "ring-2 ring-sky-300 shadow-[0_0_18px_rgba(125,211,252,0.55)]",
+  flag: "ring-2 ring-amber-200 shadow-[0_0_24px_rgba(253,230,138,0.7)]",
+  reserve: "ring-2 ring-emerald-300 shadow-[0_0_20px_rgba(110,231,183,0.6)]",
+  turn: "ring-2 ring-violet-300 shadow-[0_0_18px_rgba(196,181,253,0.5)]",
+  finish: "ring-2 ring-amber-200 shadow-[0_0_22px_rgba(253,230,138,0.7)]",
+};
+
+const PLAYBACK_TONE_BADGE: Record<PlaybackTone, string> = {
+  reveal: "border-cyan-200/70 bg-cyan-300/15 text-cyan-50",
+  move: "border-sky-300/70 bg-sky-400/15 text-sky-50",
+  combat: "border-rose-300/70 bg-rose-500/20 text-rose-50",
+  defense: "border-amber-300/70 bg-amber-400/15 text-amber-50",
+  defeat: "border-rose-400/70 bg-rose-500/25 text-rose-50",
+  advance: "border-sky-300/70 bg-sky-400/15 text-sky-50",
+  flag: "border-amber-200/70 bg-amber-400/20 text-amber-50",
+  reserve: "border-emerald-300/70 bg-emerald-400/15 text-emerald-50",
+  turn: "border-violet-300/70 bg-violet-400/15 text-violet-50",
+  finish: "border-amber-200/80 bg-amber-400/20 text-amber-50",
+};
+
+const playbackFrameDuration = (frame: PlaybackFrame | undefined): number => {
+  if (frame === undefined) return 600;
+  if (frame.tone === "move" || frame.tone === "advance") return 300;
+  if (frame.tone === "reveal") return 520;
+  if (frame.tone === "turn" || frame.tone === "finish") return 900;
+  return 640;
+};
 
 const UnitPill = ({
   view,
@@ -652,6 +693,146 @@ const EventLog = ({
   </details>
 );
 
+const PlaybackStage = ({
+  view,
+  viewerSide,
+  highlightUnitIds,
+  highlightCoordinateKeys,
+  tone,
+  frame,
+  index,
+  total,
+  flagCoordinateKeys,
+  onSkip,
+}: {
+  view: PlayerMatchView;
+  viewerSide: PlayerSide;
+  highlightUnitIds: ReadonlySet<string>;
+  highlightCoordinateKeys: ReadonlySet<string>;
+  tone: PlaybackTone | null;
+  frame: PlaybackFrame | undefined;
+  index: number;
+  total: number;
+  flagCoordinateKeys: ReadonlySet<string>;
+  onSkip: () => void;
+}) => {
+  const rows = buildBoardRows(view, viewerSide);
+  const columnLabels = rows[0]?.cells.map((cell) => cell.coordinate.col) ?? [];
+  const cellHighlight = tone === null ? "" : PLAYBACK_TONE_CELL[tone];
+
+  return (
+    <section className="relative overflow-hidden rounded-[1.75rem] border border-cyan-300/30 bg-gradient-to-b from-slate-900/95 to-slate-950/95 p-3 shadow-[0_0_45px_rgba(8,47,73,0.55)] sm:p-4">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-40"
+        aria-hidden="true"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle at 50% 0%, rgba(34,211,238,0.18), transparent 60%)",
+        }}
+      />
+      <div className="relative flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[0.6rem] font-semibold uppercase tracking-[0.24em] text-cyan-300/80">
+            Action Playback
+          </p>
+          <h2 className="mt-0.5 truncate text-base font-black text-white">
+            {frame?.title ?? "再生中"}
+          </h2>
+        </div>
+        <button
+          type="button"
+          onClick={onSkip}
+          className="shrink-0 rounded-full border border-slate-500/70 bg-slate-900/80 px-3 py-1.5 text-xs font-bold text-slate-100 transition hover:border-cyan-300"
+        >
+          スキップ ⏭
+        </button>
+      </div>
+
+      <div className="relative mt-2 flex items-center gap-2">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-fuchsia-400 transition-all duration-200"
+            style={{
+              width: `${total <= 1 ? 100 : Math.round(((index + 1) / total) * 100)}%`,
+            }}
+          />
+        </div>
+        <span className="shrink-0 text-[0.6rem] font-bold text-slate-400">
+          {Math.min(index + 1, total)}/{total}
+        </span>
+      </div>
+
+      {frame !== undefined ? (
+        <div
+          className={`relative mt-2 inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1 text-[0.7rem] font-bold ${
+            PLAYBACK_TONE_BADGE[frame.tone]
+          }`}
+        >
+          <span className="truncate">{frame.detail}</span>
+        </div>
+      ) : null}
+
+      <div className="relative mt-3 grid grid-cols-[1rem_minmax(0,1fr)] gap-1 sm:grid-cols-[1.25rem_minmax(0,1fr)]">
+        <div aria-hidden="true" />
+        <div className="grid grid-cols-8 gap-1 text-center text-[0.55rem] font-bold text-slate-500">
+          {columnLabels.map((column) => (
+            <span key={`pb-col-${column}`}>c{column}</span>
+          ))}
+        </div>
+        {rows.map((row) => (
+          <div key={`pb-row-${row.rowIndex}`} className="contents">
+            <div className="flex items-center justify-center text-[0.55rem] font-bold text-slate-500">
+              r{row.rowIndex}
+            </div>
+            <div
+              className="grid w-full grid-cols-8 gap-1"
+              aria-label="action playback board"
+            >
+              {row.cells.map((cell) => {
+                const coordinate = coordinateKey(cell.coordinate);
+                const isFlagCell = flagCoordinateKeys.has(coordinate);
+                const unit = cell.unit;
+                const highlighted =
+                  highlightCoordinateKeys.has(coordinate) ||
+                  (unit !== null && highlightUnitIds.has(unit.unitId));
+                return (
+                  <div
+                    key={`pb-${coordinate}`}
+                    className={`relative aspect-square w-full min-w-0 rounded-lg border p-0.5 transition-all duration-200 sm:rounded-xl ${
+                      isFlagCell
+                        ? "border-amber-200/70 bg-amber-400/10"
+                        : "border-slate-800 bg-slate-950/80"
+                    } ${highlighted ? cellHighlight : ""}`}
+                  >
+                    <span className="absolute left-1 top-0.5 z-10 rounded bg-slate-950/70 px-0.5 text-[0.46rem] font-bold text-slate-500">
+                      {cell.coordinate.row},{cell.coordinate.col}
+                    </span>
+                    {isFlagCell ? (
+                      <span className="absolute inset-x-1 bottom-0.5 z-10 rounded border border-amber-200/60 bg-amber-400/20 px-0.5 text-center text-[0.46rem] font-black text-amber-50">
+                        旗
+                      </span>
+                    ) : null}
+                    {unit === null ? (
+                      <span className="flex h-full items-center justify-center text-[0.6rem] text-slate-700">
+                        ·
+                      </span>
+                    ) : (
+                      <UnitPill view={view} unit={unit} selected={false} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="relative mt-3 text-[0.66rem] leading-4 text-slate-400">
+        アクション結果を順番に再生しています。未公開カードの数値は公開後のみ表示します。
+      </p>
+    </section>
+  );
+};
+
 export default function LocalMatchDebugClient({
   initialData,
   viewerOptions,
@@ -679,6 +860,13 @@ export default function LocalMatchDebugClient({
   >([]);
   const [error, setError] = useState<RuleError | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [playback, setPlayback] = useState<{
+    frames: PlaybackFrame[];
+    preView: PlayerMatchView;
+    postView: PlayerMatchView;
+    pending: LocalDebugViewResponse;
+  } | null>(null);
+  const [playbackIndex, setPlaybackIndex] = useState(0);
   const browserHarnessRef = useRef<ReturnType<
     typeof createLocalDebugBrowserHarness
   > | null>(null);
@@ -792,6 +980,42 @@ export default function LocalMatchDebugClient({
     return new Set(coordinates.map(coordinateKey));
   }, [view.boardSize, view.players]);
 
+  const isAnimating = playback !== null;
+  const currentFrame = playback?.frames[playbackIndex];
+  const playbackBoard = useMemo(
+    () =>
+      playback === null
+        ? null
+        : computePlaybackBoard(
+            playback.preView,
+            playback.postView,
+            playback.frames,
+            playbackIndex,
+          ),
+    [playback, playbackIndex],
+  );
+  const playbackView: PlayerMatchView | null =
+    playback === null || playbackBoard === null
+      ? null
+      : { ...playback.preView, units: playbackBoard.units };
+  const playbackHighlightUnitIds = useMemo(
+    () => new Set(playbackBoard?.highlight?.unitIds ?? []),
+    [playbackBoard],
+  );
+  const playbackHighlightCoordinateKeys = useMemo(
+    () =>
+      new Set(
+        (playbackBoard?.highlight?.coordinates ?? []).map(coordinateKey),
+      ),
+    [playbackBoard],
+  );
+  const needsHandoff =
+    !isAnimating &&
+    view.phase === "active" &&
+    view.currentTurnPlayerId !== null &&
+    view.currentTurnPlayerId !== view.viewerId;
+  const interactionLocked = isAnimating || needsHandoff;
+
   const resetSelection = () => {
     setSelectedUnitId(null);
     setActionMode("none");
@@ -814,8 +1038,44 @@ export default function LocalMatchDebugClient({
 
   const applyViewResponse = (nextData: LocalDebugViewResponse) => {
     setData(nextData);
+    setPlayback(null);
+    setPlaybackIndex(0);
     resetSelection();
     resetSetupDraft();
+  };
+
+  // Instead of jumping straight to the resolved board, build a playback from the
+  // reducer events and animate them for the acting viewer. The resolved view is
+  // applied only once the playback finishes (or is skipped).
+  const handleActionResponse = (
+    preView: PlayerMatchView,
+    nextData: LocalDebugViewResponse,
+  ) => {
+    const steps = buildPlaybackSteps({
+      events: nextData.lastActionEvents,
+      preView,
+      postView: nextData.view,
+    });
+    const frames = buildPlaybackFrames(steps);
+
+    if (frames.length === 0) {
+      applyViewResponse(nextData);
+      return;
+    }
+
+    resetSelection();
+    setPlaybackIndex(0);
+    setPlayback({
+      frames,
+      preView,
+      postView: nextData.view,
+      pending: nextData,
+    });
+  };
+
+  const finishPlayback = () => {
+    if (playback === null) return;
+    applyViewResponse(playback.pending);
   };
 
   useEffect(() => {
@@ -836,6 +1096,26 @@ export default function LocalMatchDebugClient({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Advance the playback frame by frame, then commit the resolved view.
+  useEffect(() => {
+    if (playback === null) return;
+    const atLastFrame = playbackIndex >= playback.frames.length - 1;
+
+    if (atLastFrame) {
+      const timer = setTimeout(() => {
+        finishPlayback();
+      }, 750);
+      return () => clearTimeout(timer);
+    }
+
+    const timer = setTimeout(
+      () => setPlaybackIndex((current) => current + 1),
+      playbackFrameDuration(playback.frames[playbackIndex]),
+    );
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playback, playbackIndex]);
 
   const fetchBoardCandidates = (unitId: UnitView["unitId"]) => {
     resetSelection();
@@ -1029,8 +1309,10 @@ export default function LocalMatchDebugClient({
   };
 
   const submitSelectedAction = () => {
+    if (interactionLocked || isPending) return;
     if (actionMode === "concede") {
       setError(null);
+      const preView = view;
       startTransition(() => {
         const harness = browserHarnessRef.current;
         if (harness === null) {
@@ -1049,7 +1331,7 @@ export default function LocalMatchDebugClient({
           return;
         }
 
-        applyViewResponse(response.value);
+        handleActionResponse(preView, response.value);
       });
       return;
     }
@@ -1076,6 +1358,7 @@ export default function LocalMatchDebugClient({
     }
 
     setError(null);
+    const preView = view;
     startTransition(() => {
       const harness = browserHarnessRef.current;
       if (harness === null) {
@@ -1116,7 +1399,7 @@ export default function LocalMatchDebugClient({
         return;
       }
 
-      applyViewResponse(response.value);
+      handleActionResponse(preView, response.value);
     });
   };
 
@@ -1160,7 +1443,7 @@ export default function LocalMatchDebugClient({
   };
 
   const handleCellClick = (unit: UnitView | null, destination: Coordinate) => {
-    if (isFinished) return;
+    if (isFinished || interactionLocked) return;
 
     if (isSetupPhase) {
       if (setupSubmitted || setupLockedForPlayer2) return;
@@ -1216,8 +1499,25 @@ export default function LocalMatchDebugClient({
   };
 
   return (
-    <main className="min-h-dvh overflow-x-hidden bg-slate-950 text-slate-100">
-      <div className="mx-auto flex w-full max-w-md flex-col gap-3 px-2 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:max-w-3xl sm:px-4 lg:max-w-5xl">
+    <main className="relative min-h-dvh overflow-x-hidden bg-slate-950 text-slate-100">
+      <div
+        className="pointer-events-none fixed inset-0 z-0"
+        aria-hidden="true"
+        style={{
+          backgroundImage:
+            "radial-gradient(1200px 600px at 50% -10%, rgba(56,189,248,0.12), transparent 55%), radial-gradient(900px 500px at 100% 0%, rgba(217,70,239,0.1), transparent 50%), radial-gradient(900px 600px at 0% 100%, rgba(16,185,129,0.08), transparent 55%)",
+        }}
+      />
+      <div
+        className="pointer-events-none fixed inset-0 z-0 opacity-[0.06]"
+        aria-hidden="true"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(148,163,184,0.6) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.6) 1px, transparent 1px)",
+          backgroundSize: "44px 44px",
+        }}
+      />
+      <div className="relative z-10 mx-auto flex w-full max-w-md flex-col gap-3 px-2 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:max-w-3xl sm:px-4 lg:max-w-5xl">
         <header className="sticky top-0 z-30 rounded-b-3xl border border-slate-800 bg-slate-950/95 p-3 shadow-2xl shadow-black/30 backdrop-blur sm:rounded-3xl">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -1520,8 +1820,68 @@ export default function LocalMatchDebugClient({
           </section>
         ) : null}
 
-        <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-2 shadow-2xl shadow-black/20 sm:p-3">
-          <div className="mb-2 flex items-center justify-between gap-3 px-1">
+        {isAnimating && playbackView !== null ? (
+          <PlaybackStage
+            view={playbackView}
+            viewerSide={viewerSide}
+            highlightUnitIds={playbackHighlightUnitIds}
+            highlightCoordinateKeys={playbackHighlightCoordinateKeys}
+            tone={playbackBoard?.highlight?.tone ?? null}
+            frame={currentFrame}
+            index={playbackIndex}
+            total={playback?.frames.length ?? 0}
+            flagCoordinateKeys={flagCoordinateKeys}
+            onSkip={finishPlayback}
+          />
+        ) : null}
+
+        {needsHandoff && viewerPlayer !== undefined && currentPlayer !== undefined ? (
+          <section
+            className="relative overflow-hidden rounded-[1.75rem] border border-emerald-300/40 bg-gradient-to-b from-emerald-500/10 to-slate-950/90 p-6 text-center shadow-[0_0_45px_rgba(6,95,70,0.45)]"
+            role="status"
+          >
+            <div
+              className="pointer-events-none absolute inset-0 opacity-40"
+              aria-hidden="true"
+              style={{
+                backgroundImage:
+                  "radial-gradient(circle at 50% 10%, rgba(16,185,129,0.25), transparent 60%)",
+              }}
+            />
+            <p className="relative text-[0.62rem] font-semibold uppercase tracking-[0.28em] text-emerald-200/80">
+              Handoff
+            </p>
+            <h2 className="relative mt-3 text-xl font-black text-white">
+              {playerDisplayName(viewerPlayer.side)}の行動が終了しました
+            </h2>
+            <p className="relative mt-2 text-base font-bold text-emerald-50">
+              次は{playerDisplayName(currentPlayer.side)}の手番です
+            </p>
+            <p className="relative mt-3 text-sm leading-6 text-emerald-50/80">
+              端末を{playerDisplayName(currentPlayer.side)}へ渡してください。前のプレイヤーの伏せカード・数値・リザーバー内容はこの画面には表示しません。
+            </p>
+            <button
+              type="button"
+              onClick={() => refreshView(currentPlayer.side)}
+              disabled={isPending}
+              className="relative mt-5 min-h-14 w-full rounded-2xl border border-emerald-200 bg-emerald-400/20 px-4 py-3 text-base font-black text-emerald-50 shadow-lg shadow-emerald-950/40 transition hover:bg-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {playerDisplayName(currentPlayer.side)}の手番を始める
+            </button>
+          </section>
+        ) : null}
+
+        {!interactionLocked ? (
+        <section className="relative overflow-hidden rounded-[1.75rem] border border-cyan-300/20 bg-gradient-to-b from-slate-900/90 to-slate-950/90 p-2 shadow-[0_0_40px_rgba(8,47,73,0.45)] sm:p-3">
+          <div
+            className="pointer-events-none absolute inset-0 opacity-30"
+            aria-hidden="true"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at 50% 50%, rgba(34,211,238,0.1), transparent 65%)",
+            }}
+          />
+          <div className="relative mb-2 flex items-center justify-between gap-3 px-1">
             <div>
               <h2 className="text-base font-bold text-white">8×8 Board</h2>
               <p className="text-[0.68rem] text-slate-400">
@@ -1532,7 +1892,7 @@ export default function LocalMatchDebugClient({
               {view.boardSize.width}×{view.boardSize.height}
             </span>
           </div>
-          <div className="mb-2 grid grid-cols-4 gap-1 text-center text-[0.58rem] font-bold sm:text-[0.68rem]">
+          <div className="relative mb-2 grid grid-cols-4 gap-1 text-center text-[0.58rem] font-bold sm:text-[0.68rem]">
             <span className="rounded-full border border-cyan-300/50 px-1.5 py-1 text-cyan-100">
               ○ 移動
             </span>
@@ -1546,7 +1906,7 @@ export default function LocalMatchDebugClient({
               旗 攻撃
             </span>
           </div>
-          <div className="grid grid-cols-[1rem_minmax(0,1fr)] gap-1 sm:grid-cols-[1.25rem_minmax(0,1fr)]">
+          <div className="relative grid grid-cols-[1rem_minmax(0,1fr)] gap-1 sm:grid-cols-[1.25rem_minmax(0,1fr)]">
             <div aria-hidden="true" />
             <div className="grid grid-cols-8 gap-1 text-center text-[0.55rem] font-bold text-slate-500">
               {boardColumnLabels.map((column) => (
@@ -1687,8 +2047,9 @@ export default function LocalMatchDebugClient({
             ))}
           </div>
         </section>
+        ) : null}
 
-        {!isSetupPhase ? (
+        {!isSetupPhase && !interactionLocked ? (
           <section className="rounded-3xl border border-slate-800 bg-slate-900/95 p-3 shadow-2xl shadow-black/30 sm:p-4">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-base font-bold text-white">主要操作</h2>
@@ -1786,7 +2147,7 @@ export default function LocalMatchDebugClient({
           </section>
         ) : null}
 
-        {!isSetupPhase ? (
+        {!isSetupPhase && !interactionLocked ? (
           <section className="grid gap-3 lg:grid-cols-2">
             {displayPlayers.map((player) => (
               <div key={player.id} className="grid gap-3">
@@ -1807,11 +2168,15 @@ export default function LocalMatchDebugClient({
           </section>
         ) : null}
 
-        {!isSetupPhase ? <LastCombatPanel events={data.events} /> : null}
+        {!isSetupPhase && !interactionLocked ? (
+          <LastCombatPanel events={data.events} />
+        ) : null}
 
-        {!isSetupPhase ? <DetailPanel unit={selectedUnit} /> : null}
+        {!isSetupPhase && !interactionLocked ? (
+          <DetailPanel unit={selectedUnit} />
+        ) : null}
 
-        {!isSetupPhase ? (
+        {!isSetupPhase && !interactionLocked ? (
           <section className="rounded-3xl border border-rose-300/30 bg-rose-500/10 p-4">
             <h2 className="text-base font-bold text-rose-50">危険操作</h2>
             <p className="mt-2 text-xs leading-5 text-rose-100/80">
